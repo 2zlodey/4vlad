@@ -1,0 +1,1 @@
+gcc -Wall -Wextra -std=c11 main.c vlad-dev.c cJSON/cJSON.c -I./cJSON -o 4vlad.bin

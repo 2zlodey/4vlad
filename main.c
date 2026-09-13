@@ -1,0 +1,267 @@
+#include <stdint.h>
+const uint32_t ver=2401103;
+const uint8_t debug=1;   //permission for out debug information
+#include <sys/types.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+//#include <math.h>
+#include "vlad-dev.h"
+#include <time.h>
+#include <errno.h>
+
+#define UDP_BUFFER_SIZE 1100
+#define SERVER_IP          "127.0.0.1"
+//#define my_IP          "127.0.0.1"
+#define SERVER_PORT        2222
+#define CLIENT_PORT        3333
+#define HANDSHAKE_TIMEOUT  2
+#define tryConnectToServer 5
+
+struct timeval timeTMP;
+void cl(char * text){
+  if (debug){
+    gettimeofday(&timeTMP, NULL);
+    printf("%ld.%ld %s\n",timeTMP.tv_sec,timeTMP.tv_usec, text);
+  }
+}
+
+#pragma pack(push, 1) 
+typedef struct {
+    uint32_t cnt; //counter
+    long int TSS; //timestamp
+    long int TSN; //timestamp
+    uint16_t port; // UDP PORT for response
+    Device dev; //структура с описанием девайса из джейсона
+//    keyPublic;
+} HandShake;
+#pragma pack(pop)
+
+
+
+double outcounter=0;
+
+///////////////////////////////////////////////////////////////
+////////////     UDP         //////////////////////////////////
+///////////////////////////////////////////////////////////////
+
+//маленькая обертка на отправку данных по удп
+int udp_send(int sock, const unsigned char *buffer, size_t size, const struct sockaddr_in *addr){
+    ssize_t sent = sendto(sock,buffer,size, 0, (const struct sockaddr *)addr, sizeof(*addr));
+    if (sent < 0) {
+        perror("sendto");
+        cl("!! error sendto");
+        return -1;
+    }
+    if ((size_t)sent != size) {
+        fprintf(stderr, "Отправлен неполный UDP-пакет\n");
+        cl("!! error: Отправлен неполный UDP-пакет");
+        return -1;
+    }
+    return 0;
+}//end udp-send()
+/////////////////////////////////////////////////////////
+// ОСНОВНАЯ ФУНКЦИЯ UDP-отправки заголовочного пакета
+/////////////////////////////////////////////////////////
+int sendHS(const HandShake *dev) {
+    unsigned char buffer[UDP_BUFFER_SIZE];
+    // Копируем Device в буфер
+    memcpy(buffer, dev, sizeof(HandShake));
+
+    struct sockaddr_in local_addr;
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        return 1;
+    }
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_addr.s_addr = htonl(INADDR_ANY); //0.0.0.0 ANY
+    local_addr.sin_port = htons(CLIENT_PORT);
+    if (bind(sock, (struct sockaddr *)&local_addr, sizeof(local_addr)) < 0) {
+        perror("bind");
+        close(sock);
+        return 1;
+    }
+    printf("UDP socket is listening on 0.0.0.0:%d\n",
+           CLIENT_PORT);
+    // АДРЕС СЕРВЕРА
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) != 1){
+        fprintf(stderr, "Некорректный IP-адрес\n");
+        cl("Некорректный IP-адрес");
+        close(sock);
+        return -1;
+    }
+
+    // ПОВТОРНЫЕ ПОПЫТКИ
+    int tryCount = 0;
+    cl("? try connect to server:");
+    while (tryCount < tryConnectToServer) {
+        tryCount++;
+        printf("Попытка подключения %d из %d\n", tryCount, tryConnectToServer);
+        // Отправляем HS
+        if (udp_send(sock, buffer, sizeof(HandShake), &server_addr) != 0) {
+            fprintf(stderr, "Ошибка отправки Device\n");
+            cl("! Error of send HS");
+            close(sock);
+            return -1;
+        }
+    // Ждём ответ 2 секунды
+        struct timeval timeout;
+        timeout.tv_sec = HANDSHAKE_TIMEOUT;
+        timeout.tv_usec = 0;
+        if (setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout))<0){
+            perror("setsockopt");
+            cl("! error setsockopt");
+            close(sock);
+            return -1;
+        }
+        unsigned char response[UDP_BUFFER_SIZE];
+        struct sockaddr_in response_addr;
+        socklen_t response_addr_len = sizeof(response_addr);
+        ssize_t received = recvfrom(sock,response,
+        sizeof(response),0, (struct sockaddr *)&response_addr, &response_addr_len);
+        if (received < 0){
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                printf("Ответ не получен за 2 секунды\n");
+                if (tryCount >= tryConnectToServer) {
+                    printf("Превышено число попыток подключения\n");
+                    close(sock);
+                    return -1;
+                }
+                printf("Повторяем попытку...\n");
+                continue;
+            }
+            perror("recvfrom");
+            close(sock);
+            return -1;
+        }
+    // ОТВЕТ ПОЛУЧЕН
+        printf("Сервер ответил. Получено %zd байт\n", received);
+        break;
+    }
+    // ДАЛЬНЕЙШИЙ ДИАЛОГ
+    printf("Переходим в режим диалога\n");
+    close(sock);
+
+    return 0;
+} ///end of function
+
+
+
+////////////   Main   ///////////////////////////
+//////////////   Main   /////////////////////////
+////////////   Main   ///////////////////////////
+//////////// Main   /////////////////////////////
+
+
+int main(void){
+cl("* * * Start");
+///////////////////////////////////////////////////////////////
+ // 1. Создаём и инициализируем Device так просто что бы был один
+///////////////////////////////////////////////////////////////
+    Device dev = {0};
+    dev.id = 12345;
+    dev.version = 260911.01;
+    dev.coord.lon = 2.154007;
+    dev.coord.lat = 41.387400;
+//от фонаря
+    for (int i = 0; i < 16; i++){
+        dev.rfin[i].in = i;
+        dev.rfin[i].from = i * 10;
+        dev.rfin[i].to = i * 10 + 9;
+        dev.rfin[i].polar = i * 22.5;
+        dev.rfin[i].type = i % 6;
+        dev.rfin[i].dBi = 10 + i;
+        dev.rfin[i].direction = i * 22.5;
+    }
+cl("# наполнили фонаревыми данными ");
+// просто для проверки
+///////////////////////////////////////////////////////////////
+// 2. и Сохраняем этот  Device в джейсон-файл так просто для проверки
+// что алгоритм работает. єто можно из кода вообще убрать
+///////////////////////////////////////////////////////////////
+
+    if (!device_save_json("device.json", &dev)) {
+        cl("Ошибка сохранения Device");
+        return 1;
+    } else cl ("Device сохранён в ini'fail в JSON.");
+
+///////////////////////////////////////////////////////////////
+// 3. Создаём ДРУГОЙ Device в памяти "fromINI" считівая его из ини-файла
+
+    Device fromINI = {0};
+
+// 4. Загружаем в него данные из JSON для проверки
+///////////////////////////////////////////////////////////////
+    if (!device_load_json("device.json", &fromINI)) {
+        cl("Ошибка загрузки Device");
+        return 1;
+    }
+///////////////////////////////////////////////////////////////
+// 5. если хотим то можем проверить что мы начитали из джейсона:
+///////////////////////////////////////////////////////////////
+
+//    printf("\nLoaded Device:\n");
+//    printf("id      = %d\n", fromINI.id);
+//    printf("version = %.2f\n", fromINI.version);
+//    printf("lon     = %.6f\n", fromINI.coord.lon);
+//    printf("lat     = %.6f\n", fromINI.coord.lat);
+//    for (int i = 0; i < 16; i++) {
+//        printf("\nAntenna[%d]:\n",i);
+//        printf("in        = %d\n",fromINI.rfin[i].in);
+//        printf("from      = %d\n", fromINI.rfin[i].from);
+//        printf("to        = %d\n", fromINI.rfin[i].to);
+//        printf("polar     = %.2f\n",fromINI.rfin[i].polar);
+//        printf("type      = %d\n", fromINI.rfin[i].type);
+//        printf("dBi       = %d\n", fromINI.rfin[i].dBi);
+//        printf("direction = %.2f\n",fromINI.rfin[i].direction);
+//    }
+///////////////////////////////////////////////////////////////
+// 6. Убеждаемся что все ОК!!!
+///////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////
+// 7. теперь создаем хендшейк
+// сначала чистый буфер как есть с информацией из ини-файла:
+// ту чтопрочитали в переменную fromINI с номером и таймстампом
+///////////////////////////////////////////////////////////////
+  
+//    struct timecpec ts;
+//    timespec_get(&ts, TIME_UTC);
+    
+//    long long ts_ms=((long long)ts.tv_sec*1000)+(ts.tv_nsec/1000000);
+//    printf("ts_ms=%lldms\n",ts_ms) ;
+    
+
+//*********************************//
+    gettimeofday(&timeTMP, NULL);
+
+    HandShake hsOriginal={
+    .cnt=outcounter++,
+    .TSS=timeTMP.tv_sec,
+    .TSN=timeTMP.tv_usec,
+    .port=CLIENT_PORT,
+    .dev=fromINI
+    };
+//***********************************
+    cl("i HandShake ready to send");
+    printf("size HS= %zu\n",sizeof(hsOriginal));
+
+//////***************************************************************///
+
+    if (sendHS(&hsOriginal) != 0) {
+        fprintf(stderr, "UDP-диалог завершён с ошибкой\n");
+        return 1;
+    } else cl("i HandShake sended and answer recived");
+    return 0;
+} //end of main
