@@ -58,6 +58,8 @@ function parseHandShake(buffer) {
 }
 
 socket.on('message', (buffer, remote) => {
+  socket.send(buffer, 0, 2, 3333, remote.address);
+
   console.log(
     `Получено ${buffer.length} байт от ` +
     `${remote.address}:${remote.port}`
