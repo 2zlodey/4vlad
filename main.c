@@ -16,7 +16,7 @@ const uint8_t debug=1;   //permission for out debug information
 #include <errno.h>
 
 #define UDP_BUFFER_SIZE 1100
-#define SERVER_IP          "127.0.0.1"
+#define SERVER_IP          "82.165.20.164"
 //#define my_IP          "127.0.0.1"
 #define SERVER_PORT        2222
 #define CLIENT_PORT        3333
