@@ -1,165 +1,28 @@
 using System;
-using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
+using UdpHandshakeParser.Protocol;
 
-namespace UdpHandshakeParser
+namespace UdpParserApp
 {
-    // Аналог parseAntenna()
-    public class Antenna
-    {
-        public int In { get; set; }
-        public int From { get; set; }
-        public int To { get; set; }
-        public double Polar { get; set; }
-        public int Type { get; set; }
-
-        [JsonPropertyName("dBi")]
-        public int DBi { get; set; }
-
-        public double Direction { get; set; }
-    }
-
-    // Аналог parseDevice()
-    public class Device
-    {
-        public int Id { get; set; }
-        public double Version { get; set; }
-        public Coordinates Coord { get; set; } = new();
-        public Antenna[] Rfin { get; set; } = new Antenna[16];
-    }
-
-    public class Coordinates
-    {
-        public double Lon { get; set; }
-        public double Lat { get; set; }
-    }
-
-    // Аналог parseHandShake()
-    public class HandShake
-    {
-        public uint Cnt { get; set; }
-        public long TSS { get; set; }
-        public long TSN { get; set; }
-        public ushort Port { get; set; }
-        public Device Dev { get; set; } = new();
-    }
-
-    public static class PacketParser
-    {
-        private const int ExpectedSize = 626;
-
-        // Чтение Int32 little-endian
-        private static int ReadInt32LE(byte[] buffer, int offset)
-        {
-            return BinaryPrimitives.ReadInt32LittleEndian(
-                buffer.AsSpan(offset, 4));
-        }
-
-        // Чтение UInt32 little-endian
-        private static uint ReadUInt32LE(byte[] buffer, int offset)
-        {
-            return BinaryPrimitives.ReadUInt32LittleEndian(
-                buffer.AsSpan(offset, 4));
-        }
-
-        // Чтение UInt16 little-endian
-        private static ushort ReadUInt16LE(byte[] buffer, int offset)
-        {
-            return BinaryPrimitives.ReadUInt16LittleEndian(
-                buffer.AsSpan(offset, 2));
-        }
-
-        // Чтение Int64 little-endian
-        private static long ReadInt64LE(byte[] buffer, int offset)
-        {
-            return BinaryPrimitives.ReadInt64LittleEndian(
-                buffer.AsSpan(offset, 8));
-        }
-
-        // Аналог buffer.readDoubleLE()
-        private static double ReadDoubleLE(byte[] buffer, int offset)
-        {
-            long bits = ReadInt64LE(buffer, offset);
-            return BitConverter.Int64BitsToDouble(bits);
-        }
-
-        private static Antenna ParseAntenna(byte[] buffer, int offset)
-        {
-            return new Antenna
-            {
-                In = ReadInt32LE(buffer, offset),
-                From = ReadInt32LE(buffer, offset + 4),
-                To = ReadInt32LE(buffer, offset + 8),
-                Polar = ReadDoubleLE(buffer, offset + 12),
-                Type = ReadInt32LE(buffer, offset + 20),
-                DBi = ReadInt32LE(buffer, offset + 24),
-                Direction = ReadDoubleLE(buffer, offset + 28)
-            };
-        }
-
-        private static Device ParseDevice(byte[] buffer, int offset)
-        {
-            var device = new Device
-            {
-                Id = ReadInt32LE(buffer, offset),
-                Version = ReadDoubleLE(buffer, offset + 4),
-                Coord = new Coordinates
-                {
-                    Lon = ReadDoubleLE(buffer, offset + 12),
-                    Lat = ReadDoubleLE(buffer, offset + 20)
-                }
-            };
-
-            const int antennasOffset = 28;
-            const int antennaSize = 36;
-
-            for (int i = 0; i < 16; i++)
-            {
-                int antennaOffset =
-                    offset + antennasOffset + i * antennaSize;
-
-                device.Rfin[i] = ParseAntenna(buffer, antennaOffset);
-            }
-
-            return device;
-        }
-
-        public static HandShake ParseHandShake(byte[] buffer)
-        {
-            if (buffer.Length < ExpectedSize)
-            {
-                throw new Exception(
-                    $"Слишком короткий пакет: {buffer.Length} байт, " +
-                    $"ожидалось минимум {ExpectedSize}");
-            }
-
-            return new HandShake
-            {
-                Cnt = ReadUInt32LE(buffer, 0),
-                TSS = ReadInt64LE(buffer, 4),
-                TSN = ReadInt64LE(buffer, 12),
-                Port = ReadUInt16LE(buffer, 20),
-                Dev = ParseDevice(buffer, 22)
-            };
-        }
-    }
-
     internal class Program
     {
-        private const string HOST = "0.0.0.0";
-        private const int PORT = 2222;
+        private const int ListenPort = 2222;
+
+        private const int KeySize = 32;
+        private const int NonceSize = 12;
+
+        private static readonly List<ConnectedDevice> Devices = new();
 
         private static async Task Main()
         {
-            using var socket = new UdpClient(
-                new IPEndPoint(IPAddress.Any, PORT));
+            using var socket = new UdpClient(ListenPort);
 
             Console.WriteLine(
-                $"UDP-сервер слушает {HOST}:{PORT}");
+                $"UDP-сервер слушает 0.0.0.0:{ListenPort}");
 
             while (true)
             {
@@ -171,14 +34,7 @@ namespace UdpHandshakeParser
                     byte[] buffer = result.Buffer;
                     IPEndPoint remote = result.RemoteEndPoint;
 
-                    // Аналог:
-                    // socket.send(buffer, 0, 2, 3333, remote.address)
-                    //
-                    // В Node.js отправляются первые 2 байта.
-                    await socket.SendAsync(
-                        buffer.AsMemory(0, Math.Min(2, buffer.Length)),
-                        new IPEndPoint(remote.Address, 3333));
-
+                    Console.WriteLine();
                     Console.WriteLine(
                         $"Получено {buffer.Length} байт от " +
                         $"{remote.Address}:{remote.Port}");
@@ -186,34 +42,439 @@ namespace UdpHandshakeParser
                     try
                     {
                         HandShake handshake =
-                            PacketParser.ParseHandShake(buffer);
+                            HandshakeParser.Parse(buffer);
 
-                        var jsonOptions = new JsonSerializerOptions
+                        int deviceId = handshake.Dev.Id;
+
+                        IPAddress ipAddress = remote.Address;
+                        ushort devicePort = handshake.Port;
+
+                        Console.WriteLine(
+                            $"Device ID: {deviceId}");
+
+                        Console.WriteLine(
+                            $"Device address: " +
+                            $"{ipAddress}:{devicePort}");
+
+                        // -------------------------------------------------
+                        // Ищем существующее устройство по DeviceId
+                        // -------------------------------------------------
+
+                        ConnectedDevice? byId = Devices.Find(
+                            d => d.HandShake.Dev.Id == deviceId);
+
+                        // -------------------------------------------------
+                        // Ищем существующее устройство по IP + Port
+                        // -------------------------------------------------
+
+                        ConnectedDevice? byAddress = Devices.Find(
+                            d =>
+                                d.IpAddress.Equals(ipAddress) &&
+                                d.HandShake.Port == devicePort);
+
+                        ConnectedDevice device;
+
+                        // =================================================
+                        // НОВОЕ УСТРОЙСТВО
+                        //
+                        // Нет ни такого ID, ни такого IP:Port.
+                        // =================================================
+
+                        if (byId == null && byAddress == null)
                         {
-                            WriteIndented = true
-                        };
+                            device = CreateDevice(
+                                ipAddress,
+                                handshake);
 
-                        string json = JsonSerializer.Serialize(
-                            handshake, jsonOptions);
+                            Devices.Add(device);
 
-                        Console.WriteLine(json);
+                            Console.WriteLine(
+                                $"Новое устройство: " +
+                                $"ID={deviceId}");
+                        }
+
+                        // =================================================
+                        // ОБЫЧНЫЙ HANDSHAKE
+                        //
+                        // И ID, и IP:Port совпадают с одной записью.
+                        // =================================================
+
+                        else if (byId != null &&
+                                 byAddress == byId)
+                        {
+                            device = byId;
+
+                            device.HandShake = handshake;
+                            device.IpAddress = ipAddress;
+
+                            Console.WriteLine(
+                                $"Устройство обновлено: " +
+                                $"ID={deviceId}");
+                        }
+
+                        // =================================================
+                        // КОНФЛИКТ ПО DEVICE ID
+                        //
+                        // Такой ID уже есть, но адрес другой.
+                        //
+                        // Считаем, что устройство переехало.
+                        // Старую запись удаляем.
+                        // Session сохраняем.
+                        // =================================================
+
+                        else if (byId != null &&
+                                 byAddress == null)
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                            Console.WriteLine(
+                                "!!! ВНИМАНИЕ ОПЕРАТОРУ !!!");
+                            Console.WriteLine(
+                                "!!! ИЗМЕНЕНИЕ АДРЕСА УСТРОЙСТВА !!!");
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+
+                            Console.WriteLine(
+                                $"DeviceId: {deviceId}");
+
+                            Console.WriteLine(
+                                $"Старый адрес: " +
+                                $"{byId.IpAddress}:" +
+                                $"{byId.HandShake.Port}");
+
+                            Console.WriteLine(
+                                $"Новый адрес: " +
+                                $"{ipAddress}:{devicePort}");
+
+                            Console.WriteLine(
+                                "Старая запись удаляется.");
+
+                            DeviceSession session =
+                                byId.Session;
+
+                            Devices.Remove(byId);
+
+                            device = new ConnectedDevice
+                            {
+                                IpAddress = ipAddress,
+                                HandShake = handshake,
+                                Session = session
+                            };
+
+                            Devices.Add(device);
+
+                            Console.WriteLine(
+                                "Старая запись удалена.");
+                        }
+
+                        // =================================================
+                        // КОНФЛИКТ ПО IP + PORT
+                        //
+                        // Этот адрес уже принадлежит другому DeviceId.
+                        //
+                        // Старую запись удаляем.
+                        // Для нового устройства создаём новую Session.
+                        // =================================================
+
+                        else if (byId == null &&
+                                 byAddress != null)
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                            Console.WriteLine(
+                                "!!! ВНИМАНИЕ ОПЕРАТОРУ !!!");
+                            Console.WriteLine(
+                                "!!! ИЗМЕНЕНИЕ DEVICE ID !!!");
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+
+                            Console.WriteLine(
+                                $"Адрес: " +
+                                $"{ipAddress}:{devicePort}");
+
+                            Console.WriteLine(
+                                $"Старый DeviceId: " +
+                                $"{byAddress.HandShake.Dev.Id}");
+
+                            Console.WriteLine(
+                                $"Новый DeviceId: " +
+                                $"{deviceId}");
+
+                            Console.WriteLine(
+                                "Старая запись удаляется.");
+
+                            Devices.Remove(byAddress);
+
+                            device = CreateDevice(
+                                ipAddress,
+                                handshake);
+
+                            Devices.Add(device);
+
+                            Console.WriteLine(
+                                "Старая запись удалена.");
+                        }
+
+                        // =================================================
+                        // КОНФЛИКТ ПО ОБОИМ ПРИЗНАКАМ
+                        //
+                        // byId и byAddress существуют,
+                        // но это разные записи.
+                        //
+                        // Удаляем обе старые записи.
+                        // Создаём новую.
+                        // =================================================
+
+                        else
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                            Console.WriteLine(
+                                "!!! КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ !!!");
+                            Console.WriteLine(
+                                "!!! КОНФЛИКТ УСТРОЙСТВ !!!");
+                            Console.WriteLine(
+                                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+
+                            Console.WriteLine(
+                                $"Новый DeviceId: {deviceId}");
+
+                            Console.WriteLine(
+                                $"Новый адрес: " +
+                                $"{ipAddress}:{devicePort}");
+
+                            Console.WriteLine(
+                                $"Существующий DeviceId найден по адресу: " +
+                                $"{byId!.IpAddress}:" +
+                                $"{byId.HandShake.Port}");
+
+                            Console.WriteLine(
+                                $"Существующий адрес используется DeviceId: " +
+                                $"{byAddress!.HandShake.Dev.Id}");
+
+                            Console.WriteLine(
+                                "Старые записи удаляются.");
+
+                            Devices.Remove(byId);
+                            Devices.Remove(byAddress);
+
+                            device = CreateDevice(
+                                ipAddress,
+                                handshake);
+
+                            Devices.Add(device);
+
+                            Console.WriteLine(
+                                "Старые записи удалены.");
+                        }
+
+                        // -------------------------------------------------
+                        // Отправляем ответ
+                        // -------------------------------------------------
+
+                        byte[] response = CreateResponse(
+                            device.Session);
+
+                        ushort responsePort =
+                            device.HandShake.Port;
+
+                        await socket.SendAsync(
+                            response,
+                            response.Length,
+                            new IPEndPoint(
+                                device.IpAddress,
+                                responsePort));
+
+                        Console.WriteLine();
+                        Console.WriteLine(
+                            $"Отправлено {response.Length} байт на " +
+                            $"{device.IpAddress}:{responsePort}");
+
+                        // -------------------------------------------------
+                        // Информация
+                        // -------------------------------------------------
+
+                        Console.WriteLine(
+                            $"Key: " +
+                            $"{Convert.ToHexString(device.Session.Key)}");
+
+                        Console.WriteLine(
+                            $"Nonce: " +
+                            $"{Convert.ToHexString(device.Session.Nonce)}");
+
+                        Console.WriteLine(
+                            $"Timestamp: " +
+                            $"{device.Session.Timestamp}");
+
+                        Console.WriteLine();
+                        Console.WriteLine("HandShake:");
+
+                        Console.WriteLine(
+                            $"  Cnt:  {device.HandShake.Cnt}");
+
+                        Console.WriteLine(
+                            $"  TSS:  {device.HandShake.TSS}");
+
+                        Console.WriteLine(
+                            $"  TSN:  {device.HandShake.TSN}");
+
+                        Console.WriteLine(
+                            $"  Port: {device.HandShake.Port}");
+
+                        Console.WriteLine();
+                        Console.WriteLine("Device:");
+
+                        Console.WriteLine(
+                            $"  Id:       {device.HandShake.Dev.Id}");
+
+                        Console.WriteLine(
+                            $"  Version:  {device.HandShake.Dev.Version}");
+
+                        Console.WriteLine(
+                            $"  Lon:      {device.HandShake.Dev.Coord.Lon}");
+
+                        Console.WriteLine(
+                            $"  Lat:      {device.HandShake.Dev.Coord.Lat}");
+
+                        Console.WriteLine(
+                            $"  Antennas: " +
+                            $"{device.HandShake.Dev.Rfin.Length}");
+
+                        Console.WriteLine(
+                            $"  IP:       {device.IpAddress}");
+
+                        Console.WriteLine();
+                        Console.WriteLine(
+                            $"Всего устройств: {Devices.Count}");
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(
-                            $"Ошибка разбора HandShake: {ex.Message}");
+                            $"Ошибка обработки HandShake: " +
+                            $"{ex.Message}");
                     }
                 }
                 catch (SocketException ex)
                 {
-                    Console.WriteLine($"Ошибка UDP: {ex.Message}");
+                    Console.WriteLine(
+                        $"Ошибка UDP: {ex.Message}");
+
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Ошибка: {ex.Message}");
+                    Console.WriteLine(
+                        $"Ошибка: {ex.Message}");
                 }
             }
         }
+
+        // =============================================================
+        // Создание ConnectedDevice
+        // =============================================================
+
+        private static ConnectedDevice CreateDevice(
+            IPAddress ipAddress,
+            HandShake handshake)
+        {
+            return new ConnectedDevice
+            {
+                IpAddress = ipAddress,
+                HandShake = handshake,
+                Session = CreateSession()
+            };
+        }
+
+        // =============================================================
+        // Создание криптографической сессии
+        // =============================================================
+
+        private static DeviceSession CreateSession()
+        {
+            byte[] key = new byte[KeySize];
+            byte[] nonce = new byte[NonceSize];
+
+            RandomNumberGenerator.Fill(key);
+            RandomNumberGenerator.Fill(nonce);
+
+            return new DeviceSession
+            {
+                Key = key,
+                Nonce = nonce,
+                Timestamp =
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+        }
+
+        // =============================================================
+        // Формирование ответа
+        //
+        // 32 bytes Key
+        // 12 bytes Nonce
+        //  8 bytes Timestamp
+        //
+        // Итого 52 байта.
+        // =============================================================
+
+        private static byte[] CreateResponse(
+            DeviceSession session)
+        {
+            byte[] response = new byte[
+                KeySize +
+                NonceSize +
+                sizeof(long)];
+
+            Buffer.BlockCopy(
+                session.Key,
+                0,
+                response,
+                0,
+                KeySize);
+
+            Buffer.BlockCopy(
+                session.Nonce,
+                0,
+                response,
+                KeySize,
+                NonceSize);
+
+            Buffer.BlockCopy(
+                BitConverter.GetBytes(session.Timestamp),
+                0,
+                response,
+                KeySize + NonceSize,
+                sizeof(long));
+
+            return response;
+        }
+    }
+
+    // =============================================================
+    // Устройство
+    // =============================================================
+
+    public class ConnectedDevice
+    {
+        public IPAddress IpAddress { get; set; } = IPAddress.None;
+
+        public HandShake HandShake { get; set; } = new();
+
+        public DeviceSession Session { get; set; } = new();
+    }
+
+    // =============================================================
+    // Криптографическая сессия
+    // =============================================================
+
+    public class DeviceSession
+    {
+        public byte[] Key { get; set; } = Array.Empty<byte>();
+
+        public byte[] Nonce { get; set; } = Array.Empty<byte>();
+
+        public long Timestamp { get; set; }
     }
 }

@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("UdpParserApp")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+edb3a1724fc542465747cfe5d893c876092aa22e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a1941d57527365195ff7f72156c3b90c0beffd6a")]
 [assembly: System.Reflection.AssemblyProductAttribute("UdpParserApp")]
 [assembly: System.Reflection.AssemblyTitleAttribute("UdpParserApp")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
