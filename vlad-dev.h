@@ -8,9 +8,7 @@ typedef struct {
     double lon;
     double lat;
 } Coordinates;
-#pragma pack(pop)
 
-#pragma pack(push, 1)
 typedef struct {
     int in;
     int from;
@@ -20,10 +18,8 @@ typedef struct {
     int dBi;
     double direction;
 } Antenna;
-#pragma pack(pop)
-
-#pragma pack(push, 1)
 typedef struct {
+
     int id;
     double version;
     Coordinates coord;

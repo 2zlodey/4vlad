@@ -1,0 +1,15 @@
+/home/zlodey/4vlad/tools/UdpParserApp/bin/Debug/net10.0/UdpParserApp
+/home/zlodey/4vlad/tools/UdpParserApp/bin/Debug/net10.0/UdpParserApp.deps.json
+/home/zlodey/4vlad/tools/UdpParserApp/bin/Debug/net10.0/UdpParserApp.runtimeconfig.json
+/home/zlodey/4vlad/tools/UdpParserApp/bin/Debug/net10.0/UdpParserApp.dll
+/home/zlodey/4vlad/tools/UdpParserApp/bin/Debug/net10.0/UdpParserApp.pdb
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.GeneratedMSBuildEditorConfig.editorconfig
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.AssemblyInfoInputs.cache
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.AssemblyInfo.cs
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.csproj.CoreCompileInputs.cache
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.sourcelink.json
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.dll
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/refint/UdpParserApp.dll
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.pdb
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/UdpParserApp.genruntimeconfig.cache
+/home/zlodey/4vlad/tools/UdpParserApp/obj/Debug/net10.0/ref/UdpParserApp.dll

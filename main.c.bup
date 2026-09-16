@@ -16,16 +16,12 @@ const uint8_t debug=1;   //permission for out debug information
 #include <errno.h>
 
 #define UDP_BUFFER_SIZE 1100
-#define SERVER_IP          "82.165.20.164"
+#define SERVER_IP          "127.0.0.1"
 //#define my_IP          "127.0.0.1"
 #define SERVER_PORT        2222
 #define CLIENT_PORT        3333
 #define HANDSHAKE_TIMEOUT  2
 #define tryConnectToServer 5
-uint32_t BAD=0;
-uint32_t GOOD=0;
-uint32_t SENDED=0;
-
 
 struct timeval timeTMP;
 void cl(char * text){
@@ -113,7 +109,6 @@ int sendHS(const HandShake *dev) {
         tryCount++;
         printf("Попытка подключения %d из %d\n", tryCount, tryConnectToServer);
         // Отправляем HS
-        SENDED++;
         if (udp_send(sock, buffer, sizeof(HandShake), &server_addr) != 0) {
             fprintf(stderr, "Ошибка отправки Device\n");
             cl("! Error of send HS");
@@ -138,14 +133,12 @@ int sendHS(const HandShake *dev) {
         if (received < 0){
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 printf("Ответ не получен за 2 секунды\n");
-
                 if (tryCount >= tryConnectToServer) {
                     printf("Превышено число попыток подключения\n");
                     close(sock);
                     return -1;
                 }
                 printf("Повторяем попытку...\n");
-                BAD++;
                 continue;
             }
             perror("recvfrom");
@@ -153,7 +146,6 @@ int sendHS(const HandShake *dev) {
             return -1;
         }
     // ОТВЕТ ПОЛУЧЕН
-        GOOD++;
         printf("Сервер ответил. Получено %zd байт\n", received);
         break;
     }
@@ -267,34 +259,9 @@ cl("# наполнили фонаревыми данными ");
 
 //////***************************************************************///
 
-
-gettimeofday(&timeTMP, NULL);
-long long int startTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
-
-cl(" ------Start loop");
-int LOOP=1000;
-while (LOOP--){
     if (sendHS(&hsOriginal) != 0) {
         fprintf(stderr, "UDP-диалог завершён с ошибкой\n");
         return 1;
-    } else {
-        cl("i HandShake sended and answer recived");
-        printf("LOOP:%d\n",LOOP);
-    }
-}
-cl(" <-- END TIME");
-printf("\n\nSENDED: %d GOOD:%d BAD:%d\n",SENDED,GOOD,BAD);
-
-printf("Start:%lld\n",startTime);
-
-gettimeofday(&timeTMP, NULL);
-long long int endTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
-printf("End:%lld\n",endTime);
-printf("delta:%lld\n",endTime-startTime);
-
-
-//printf ("End time %ld\n", timeTMP.tv_sec*1000000+timeTMP.tv_usec);
-
-
+    } else cl("i HandShake sended and answer recived");
     return 0;
 } //end of main

@@ -2,7 +2,7 @@
 var dgram = require('dgram');
 var client = dgram.createSocket('udp4');
 var PORT = 2222;
-var HOST='127.0.0.1';
+var HOST='0.0.0.0';
 
 
 var outbuf= new Buffer.from('!!!!!!!!!!!!!!!!!');
@@ -30,7 +30,7 @@ outbuf[1]=frq & 0xff;
 //console.log(outbuf)
 
 client.on('message', (msg, remote) => {
-  client.send(outbuf, 0, 2, 3333, HOST);
+  client.send(outbuf, 0, 2, 3333, remote.address);
   console.log(msg,' from ',remote)
   aaa=(msg[1]*256) + msg[0];
   if (msg[1]>127) aaa=-(0x10000-aaa);
