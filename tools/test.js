@@ -3,7 +3,7 @@
 const dgram = require('node:dgram');
 
 const HOST = '0.0.0.0';
-const PORT = 2222;
+const PORT = 2200;
 
 const socket = dgram.createSocket('udp4');
 
@@ -49,7 +49,7 @@ function parseHandShake(buffer) {
 //  const devOffset = 22;
   return {
     cnt: buffer.readUInt32LE(0),
-    // BigInt используется для безопасного чтения 64-битного integer.
+    // BigInt используется для безопаODсного чтения 64-битного integer.
     TSS: buffer.readBigInt64LE(4),
     TSN: buffer.readBigInt64LE(12),
     port: buffer.readUInt16LE(20),
@@ -60,10 +60,7 @@ function parseHandShake(buffer) {
 socket.on('message', (buffer, remote) => {
   socket.send(buffer, 0, 2, 3333, remote.address);
 
-  console.log(
-    `Получено ${buffer.length} байт от ` +
-    `${remote.address}:${remote.port}`
-  );
+  console.log("Получено"+buffer.length+" байт от "+remote.address+":"+remote.port);
 
   try {
     const handshake = parseHandShake(buffer);
@@ -78,7 +75,12 @@ socket.on('error', (error) => {
 });
 
 socket.on('listening', () => {
-  console.log(`UDP-сервер слушает ${HOST}:${PORT}`);
+  console.log("Node.JS UDP-сервер слушает "+ HOST +":"+PORT);
 });
+
+
+/////////////// MAIN  ///////////////
+
+
 
 socket.bind(PORT, HOST);
