@@ -27,6 +27,12 @@ uint16_t PORT = 2200;
 #define CLIENT_PORT 3333
 #define HANDSHAKE_TIMEOUT 2
 #define tryConnectToServer 5
+#define COMMAND_VER 0x01
+#define COMMAND_ERROR 0xFF
+#define STATUS_INVALID_PACKET 0x01
+#define STATUS_UNKNOWN_COMMAND 0x02
+#define REQUEST_ID_SIZE 4
+#define VERSION_SIZE 10
 uint32_t BAD = 0;
 uint32_t GOOD = 0;
 uint32_t SENDED = 0;
@@ -77,6 +83,58 @@ int udp_send(int sock, const unsigned char *buffer, size_t size, const struct so
     }
     return 0;
 } // end udp-send()
+
+// request_id is always encoded in network byte order (big-endian).
+// To switch quickly to little-endian, replace ntohl/htonl below with
+// a direct memcpy or the required host-specific conversion.
+static uint32_t read_request_id(const unsigned char *buffer)
+{
+    uint32_t network_id;
+    memcpy(&network_id, buffer, sizeof(network_id));
+    return ntohl(network_id);
+}
+
+static void write_request_id(unsigned char *buffer, uint32_t request_id)
+{
+    uint32_t network_id = htonl(request_id);
+    memcpy(buffer, &network_id, sizeof(network_id));
+}
+
+// Successful VER response: [request_id: 4][version: 10].
+// The 32-bit version is right-aligned in the 10-byte field and the
+// six leading bytes are zero padding.
+static size_t build_command_response(const unsigned char *request, size_t request_size,
+                                     unsigned char *response)
+{
+    uint32_t request_id;
+
+    if (request_size < REQUEST_ID_SIZE)
+        return 0;
+
+    request_id = read_request_id(request);
+    write_request_id(response, request_id);
+
+    if (request_size != REQUEST_ID_SIZE + 1)
+    {
+        response[REQUEST_ID_SIZE] = COMMAND_ERROR;
+        response[REQUEST_ID_SIZE + 1] = STATUS_INVALID_PACKET;
+        return REQUEST_ID_SIZE + 2;
+    }
+
+    if (request[REQUEST_ID_SIZE] != COMMAND_VER)
+    {
+        response[REQUEST_ID_SIZE] = COMMAND_ERROR;
+        response[REQUEST_ID_SIZE + 1] = STATUS_UNKNOWN_COMMAND;
+        return REQUEST_ID_SIZE + 2;
+    }
+
+    memset(response + REQUEST_ID_SIZE, 0, VERSION_SIZE);
+    uint32_t network_version = htonl(ver);
+    memcpy(response + REQUEST_ID_SIZE + VERSION_SIZE - sizeof(network_version), &network_version,
+           sizeof(network_version));
+    return REQUEST_ID_SIZE + VERSION_SIZE;
+}
+
 /////////////////////////////////////////////////////////
 // ОСНОВНАЯ ФУНКЦИЯ UDP-отправки заголовочного пакета
 /////////////////////////////////////////////////////////
@@ -173,6 +231,23 @@ int sendHS(const HandShake *dev)
         // ОТВЕТ ПОЛУЧЕН
         GOOD++;
         printf("Сервер ответил. Получено %zd байт\n", received);
+
+        unsigned char command_response[REQUEST_ID_SIZE + 1 + VERSION_SIZE];
+        size_t command_response_size = build_command_response(response, (size_t)received,
+                                                              command_response);
+        if (command_response_size == 0)
+        {
+            fprintf(stderr, "Некорректный пакет команды: request_id отсутствует\n");
+            close(sock);
+            return -1;
+        }
+        if (udp_send(sock, command_response, command_response_size, &response_addr) != 0)
+        {
+            fprintf(stderr, "Ошибка отправки ответа на команду\n");
+            close(sock);
+            return -1;
+        }
+        printf("Ответ на команду отправлен: %zu байт\n", command_response_size);
         break;
     }
     // ДАЛЬНЕЙШИЙ ДИАЛОГ
