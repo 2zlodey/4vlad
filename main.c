@@ -4,6 +4,10 @@ const uint8_t debug=1;   //permission for out debug information
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <string.h>
+
+
 #include <string.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -18,7 +22,8 @@ const uint8_t debug=1;   //permission for out debug information
 #define UDP_BUFFER_SIZE 1100
 #define SERVER_IP          "82.165.20.164"
 //#define my_IP          "127.0.0.1"
-#define SERVER_PORT        2222
+//#define SERVER_PORT        2222
+uint16_t PORT=2200;
 #define CLIENT_PORT        3333
 #define HANDSHAKE_TIMEOUT  2
 #define tryConnectToServer 5
@@ -98,7 +103,7 @@ int sendHS(const HandShake *dev) {
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
+    server_addr.sin_port = htons(PORT);
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) != 1){
         fprintf(stderr, "Некорректный IP-адрес\n");
         cl("Некорректный IP-адрес");
@@ -140,6 +145,7 @@ int sendHS(const HandShake *dev) {
                 printf("Ответ не получен за 2 секунды\n");
 
                 if (tryCount >= tryConnectToServer) {
+                    BAD++;
                     printf("Превышено число попыток подключения\n");
                     close(sock);
                     return -1;
@@ -172,11 +178,29 @@ int sendHS(const HandShake *dev) {
 //////////// Main   /////////////////////////////
 
 
-int main(void){
-cl("* * * Start");
+int main(int argc, char *argv[]){
+  cl("* * * Start");
+// обрабатываем аргументы командной строки
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0) {
+            if (i + 1 < argc) {
+                PORT = atoi(argv[i + 1]); 
+                i++; 
+            } else {
+                fprintf(stderr, "Ошибка: после флага -p должно идти значение порта.\n");
+                return 1;
+            }
+        }
+    }
+ cl("i Server Port:");
+ printf("PORT:%d\n",PORT);
+
+
+
 ///////////////////////////////////////////////////////////////
  // 1. Создаём и инициализируем Device так просто что бы был один
 ///////////////////////////////////////////////////////////////
+/*
     Device dev = {0};
     dev.id = 12345;
     dev.version = 260911.01;
@@ -193,16 +217,18 @@ cl("* * * Start");
         dev.rfin[i].direction = i * 22.5;
     }
 cl("# наполнили фонаревыми данными ");
+
+*/
+
 // просто для проверки
 ///////////////////////////////////////////////////////////////
 // 2. и Сохраняем этот  Device в джейсон-файл так просто для проверки
 // что алгоритм работает. єто можно из кода вообще убрать
 ///////////////////////////////////////////////////////////////
-
-    if (!device_save_json("device.json", &dev)) {
-        cl("Ошибка сохранения Device");
-        return 1;
-    } else cl ("Device сохранён в ini'fail в JSON.");
+//    if (!device_save_json("device.json", &dev)) {
+//        cl("Ошибка сохранения Device");
+//        return 1;
+//    } else cl ("Device сохранён в ini'fail в JSON.");
 
 ///////////////////////////////////////////////////////////////
 // 3. Создаём ДРУГОЙ Device в памяти "fromINI" считівая его из ини-файла
@@ -255,7 +281,7 @@ cl("# наполнили фонаревыми данными ");
     gettimeofday(&timeTMP, NULL);
 
     HandShake hsOriginal={
-    .cnt=outcounter++,
+    .cnt=outcounter,
     .TSS=timeTMP.tv_sec,
     .TSN=timeTMP.tv_usec,
     .port=CLIENT_PORT,
@@ -272,11 +298,13 @@ gettimeofday(&timeTMP, NULL);
 long long int startTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
 
 cl(" ------Start loop");
-int LOOP=1000;
+int LOOP=3;
 while (LOOP--){
+    hsOriginal.cnt++;
     if (sendHS(&hsOriginal) != 0) {
-        fprintf(stderr, "UDP-диалог завершён с ошибкой\n");
-        return 1;
+        fprintf(stderr, "UDP-диалог завершён c ошибкой\n");
+          LOOP=0;
+//        return 1;
     } else {
         cl("i HandShake sended and answer recived");
         printf("LOOP:%d\n",LOOP);
@@ -291,7 +319,6 @@ gettimeofday(&timeTMP, NULL);
 long long int endTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
 printf("End:%lld\n",endTime);
 printf("delta:%lld\n",endTime-startTime);
-
 
 //printf ("End time %ld\n", timeTMP.tv_sec*1000000+timeTMP.tv_usec);
 
