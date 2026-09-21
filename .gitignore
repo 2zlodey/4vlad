@@ -1,0 +1,66 @@
+# Editors / local tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# PlatformIO / build directories
+.pio/
+.build/
+build/
+**/build/
+
+# Generated project outputs
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Common compiled artifacts
+*.o
+*.obj
+*.lo
+*.slo
+*.ko
+*.d
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lai
+*.la
+*.exe
+*.out
+*.app
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.pdb
+*.ilk
+*.gch
+*.pch
+*.dwo
+*.mod
+*.smod
+
+# Node / package manager noise
+node_modules/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.cache
+
+# IDE and OS metadata
+.DS_Store
+Thumbs.db
+
+# Local build outputs at repo root
+/4vlad.bin
