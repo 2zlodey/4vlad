@@ -1,6 +1,6 @@
 #include <stdint.h>
-const uint32_t ver=2401103;
-const uint8_t debug=1;   //permission for out debug information
+const uint32_t ver=2609233;
+uint8_t debug=1;   //permission for out debug information
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,8 +51,6 @@ typedef struct {
 } HandShake;
 #pragma pack(pop)
 
-
-
 double outcounter=0;
 
 ///////////////////////////////////////////////////////////////
@@ -97,7 +95,7 @@ int sendHS(const HandShake *dev) {
         close(sock);
         return 1;
     }
-    printf("UDP socket is listening on 0.0.0.0:%d\n",
+    printf("* UDP socket is listening on 0.0.0.0:%d\n",
            CLIENT_PORT);
     // АДРЕС СЕРВЕРА
     struct sockaddr_in server_addr;
@@ -106,7 +104,7 @@ int sendHS(const HandShake *dev) {
     server_addr.sin_port = htons(PORT);
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) != 1){
         fprintf(stderr, "Некорректный IP-адрес\n");
-        cl("Некорректный IP-адрес");
+        cl("! Некорректный IP-адрес");
         close(sock);
         return -1;
     }
@@ -196,7 +194,6 @@ int main(int argc, char *argv[]){
  printf("PORT:%d\n",PORT);
 
 
-
 ///////////////////////////////////////////////////////////////
  // 1. Создаём и инициализируем Device так просто что бы был один
 ///////////////////////////////////////////////////////////////
@@ -238,7 +235,7 @@ cl("# наполнили фонаревыми данными ");
 // 4. Загружаем в него данные из JSON для проверки
 ///////////////////////////////////////////////////////////////
     if (!device_load_json("device.json", &fromINI)) {
-        cl("Ошибка загрузки Device");
+        cl("! Ошибка загрузки Device");
         return 1;
     }
 ///////////////////////////////////////////////////////////////
