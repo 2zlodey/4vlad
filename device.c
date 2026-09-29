@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "vlad-dev.h"
+#include "device.h"
 
 // ============================================================
 // Сохранение Device в JSON

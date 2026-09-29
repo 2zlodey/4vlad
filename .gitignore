@@ -63,4 +63,4 @@ node_modules/
 Thumbs.db
 
 # Local build outputs at repo root
-/4vlad.bin
+/device.bin

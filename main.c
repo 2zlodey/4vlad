@@ -15,7 +15,7 @@ const uint8_t debug = 1; // permission for out debug information
 #include <unistd.h>
 
 // #include <math.h>
-#include "vlad-dev.h"
+#include "device.h"
 #include <errno.h>
 #include <time.h>
 
