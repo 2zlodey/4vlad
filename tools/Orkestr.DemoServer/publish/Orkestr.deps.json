@@ -8,6 +8,7 @@
     ".NETCoreApp,Version=v10.0": {
       "Orkestr/1.0.0": {
         "dependencies": {
+          "Orkestr.Common.Logging": "1.0.0",
           "System.CommandLine": "2.0.12"
         },
         "runtime": {
@@ -18,48 +19,71 @@
         "runtime": {
           "lib/net8.0/System.CommandLine.dll": {
             "assemblyVersion": "2.0.12.0",
-            "fileVersion": "2.0.1226.42308"
+            "fileVersion": "2.0.1226.42308",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/System.CommandLine.dll"
           }
         },
         "resources": {
           "lib/net8.0/cs/System.CommandLine.resources.dll": {
-            "locale": "cs"
+            "locale": "cs",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/cs/System.CommandLine.resources.dll"
           },
           "lib/net8.0/de/System.CommandLine.resources.dll": {
-            "locale": "de"
+            "locale": "de",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/de/System.CommandLine.resources.dll"
           },
           "lib/net8.0/es/System.CommandLine.resources.dll": {
-            "locale": "es"
+            "locale": "es",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/es/System.CommandLine.resources.dll"
           },
           "lib/net8.0/fr/System.CommandLine.resources.dll": {
-            "locale": "fr"
+            "locale": "fr",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/fr/System.CommandLine.resources.dll"
           },
           "lib/net8.0/it/System.CommandLine.resources.dll": {
-            "locale": "it"
+            "locale": "it",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/it/System.CommandLine.resources.dll"
           },
           "lib/net8.0/ja/System.CommandLine.resources.dll": {
-            "locale": "ja"
+            "locale": "ja",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/ja/System.CommandLine.resources.dll"
           },
           "lib/net8.0/ko/System.CommandLine.resources.dll": {
-            "locale": "ko"
+            "locale": "ko",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/ko/System.CommandLine.resources.dll"
           },
           "lib/net8.0/pl/System.CommandLine.resources.dll": {
-            "locale": "pl"
+            "locale": "pl",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/pl/System.CommandLine.resources.dll"
           },
           "lib/net8.0/pt-BR/System.CommandLine.resources.dll": {
-            "locale": "pt-BR"
+            "locale": "pt-BR",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/pt-BR/System.CommandLine.resources.dll"
           },
           "lib/net8.0/ru/System.CommandLine.resources.dll": {
-            "locale": "ru"
+            "locale": "ru",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/ru/System.CommandLine.resources.dll"
           },
           "lib/net8.0/tr/System.CommandLine.resources.dll": {
-            "locale": "tr"
+            "locale": "tr",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/tr/System.CommandLine.resources.dll"
           },
           "lib/net8.0/zh-Hans/System.CommandLine.resources.dll": {
-            "locale": "zh-Hans"
+            "locale": "zh-Hans",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/zh-Hans/System.CommandLine.resources.dll"
           },
           "lib/net8.0/zh-Hant/System.CommandLine.resources.dll": {
-            "locale": "zh-Hant"
+            "locale": "zh-Hant",
+            "localPath": "Orkestr.Assemblies/ThirdParty/System.CommandLine/zh-Hant/System.CommandLine.resources.dll"
+          }
+        }
+      },
+      "Orkestr.Common.Logging/1.0.0": {
+        "runtime": {
+          "Orkestr.Common.Logging.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0",
+            "localPath": "Orkestr.Assemblies/Common/Orkestr.Common.Logging/Orkestr.Common.Logging.dll"
           }
         }
       }
@@ -77,6 +101,11 @@
       "sha512": "sha512-FpW672e6qqrTd1EfKqsvUtFZaJWlTlszUR1o8tdakXhkzKbnEZVndtpfd4K3fUPCFcIs9UmcswMyYGJP1zp/rg==",
       "path": "system.commandline/2.0.12",
       "hashPath": "system.commandline.2.0.12.nupkg.sha512"
+    },
+    "Orkestr.Common.Logging/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
     }
   }
 }

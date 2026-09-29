@@ -9,7 +9,7 @@ using System.Reflection;
 using Orkestr.Commands.Interfaces;
 using CommandResult = Orkestr.Commands.Entities.CommandResult;
 using Orkestr.Core.Entities;
-using Orkestr.Logging.Entities;
+using Orkestr.Common.Logging.Enums;
 
 namespace Orkestr.Commands.Implementation;
 

@@ -1,5 +1,5 @@
 using System.Net;
-using Orkestr.Logging.Entities;
+using Orkestr.Common.Logging.Enums;
 
 namespace Orkestr.Core.Entities;
 
@@ -26,6 +26,11 @@ public sealed class EngineOptions
     ///	Log threshold used when the command line does not pass one. Information, numeric value 2.
     /// </summary>
     public const LogLevel DefaultMinimumLogLevel = LogLevel.Information;
+
+    /// <summary>
+    ///	How long the engine waits for one VER response, in milliseconds. One attempt, no retry.
+    /// </summary>
+    public const int DefaultVerTimeoutMilliseconds = 3000;
 
     /// <summary>
     ///	Checks the process invariants and stores them. A null file path means no file channel.

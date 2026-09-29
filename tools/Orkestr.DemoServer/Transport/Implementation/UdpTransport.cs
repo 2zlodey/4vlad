@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
-using Orkestr.Logging.Implementation;
-using Orkestr.Logging.Interfaces;
+using Orkestr.Common.Logging.Implementation;
+using Orkestr.Common.Logging.Interfaces;
 using Orkestr.Transport.Entities;
 using Orkestr.Transport.Interfaces;
 

@@ -1,7 +1,7 @@
 using System.Net;
 using Orkestr.Codec.Entities;
-using Orkestr.Logging.Implementation;
-using Orkestr.Logging.Interfaces;
+using Orkestr.Common.Logging.Implementation;
+using Orkestr.Common.Logging.Interfaces;
 using Orkestr.Sessions.Entities;
 using Orkestr.Sessions.Interfaces;
 
@@ -65,7 +65,7 @@ public sealed class InMemorySessionProvider : ISessionProvider
         if (byId is null && byAddress is null)
         {
             var created = Remember(sourceAddress, handshake, _factory.Create());
-            _logger.Information(LogSource.From(this), $"+ New device: ID={handshake.Dev.Id}");
+            _logger.Information(LogSource.From(this), $"New device: ID={handshake.Dev.Id}");
             return new RegistryResult(RegistryOutcome.NewDevice, created);
         }
 
@@ -74,7 +74,7 @@ public sealed class InMemorySessionProvider : ISessionProvider
         {
             byId.HandShake = handshake;
             byId.IpAddress = sourceAddress;
-            _logger.Information(LogSource.From(this), $"+ Device updated: ID={handshake.Dev.Id}");
+            _logger.Information(LogSource.From(this), $"Device updated: ID={handshake.Dev.Id}");
             return new RegistryResult(RegistryOutcome.Updated, byId);
         }
 
@@ -85,16 +85,16 @@ public sealed class InMemorySessionProvider : ISessionProvider
             Warn("!!! OPERATOR WARNING !!!");
             Warn("!!! DEVICE ADDRESS CHANGED !!!");
             Warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-            Warn($"! DeviceId: {handshake.Dev.Id}");
-            Warn($"! Previous address: {byId.IpAddress}:{byId.HandShake.Port}");
-            Warn($"! New address: {sourceAddress}:{handshake.Port}");
-            Warn("! Previous record will be removed.");
+            Warn($"DeviceId: {handshake.Dev.Id}");
+            Warn($"Previous address: {byId.IpAddress}:{byId.HandShake.Port}");
+            Warn($"New address: {sourceAddress}:{handshake.Port}");
+            Warn("Previous record will be removed.");
 
             var session = byId.Session;
             _devices.Remove(byId);
             var moved = Remember(sourceAddress, handshake, session);
 
-            Warn("! Previous record removed.");
+            Warn("Previous record removed.");
             return new RegistryResult(RegistryOutcome.AddressChanged, moved);
         }
 

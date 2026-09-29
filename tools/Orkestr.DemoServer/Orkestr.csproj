@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.12" />
+    <ProjectReference Include="..\common\Orkestr.Common.Logging\Orkestr.Common.Logging.csproj" />
   </ItemGroup>
 </Project>
