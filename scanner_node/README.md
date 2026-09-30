@@ -13,6 +13,8 @@ Portable C99 UDP client that initiates the DemoServer handshake and answers its 
 7. Reply with 14 bytes `[request_id:u32 LE][version:10 ASCII bytes, zero padded]`.
 8. Exit after VER; later network commands are not implemented yet.
 
+Normally the session reply must be exactly 52 bytes. A temporary diagnostic build supports `--ignore-session-reply-size`: it accepts any datagram size from the configured server endpoint as the session-stage response, logs a warning, and proceeds to wait for VER. This does not decode or validate that packet and must not be treated as a successful handshake; the strict 52-byte check remains enabled by default.
+
 The packet layouts follow `tools/Orkestr.DemoServer`'s `WireLayout` and `VerLayout`. The version default `1.0.0.0` follows the .NET SDK default assembly version for this project, which does not specify `Version` or `AssemblyVersion`; it has not been checked against a freshly built server here because only the .NET 8 SDK is installed while the project targets .NET 10. If the server assembly version changes, pass the matching value with `--software-version`; the server compares all ten version bytes exactly.
 
 The session reply is length-checked and its sender endpoint is checked, but the key, nonce, and timestamp are not used because the current server does not require them for VER. This node does not authenticate the server cryptographically or implement encryption or commands after VER.
@@ -96,6 +98,66 @@ Expected: `hackrf_info` reports the board and firmware; `hackrf_sweep` prints me
 
 When RF commands are added, keep libhackrf optional: a hardware-enabled CMake build should explicitly discover/link libhackrf, while the default network-only build remains independent. Hardware initialization errors should not prevent the network-only handshake/VER debugging path. Test the hardware backend separately with device detection, frequency/sample-rate/gain configuration, bounded RX capture, and a known RF source before wiring command opcodes to it.
 
+## BladeRF Hardware Preparation
+
+BladeRF is a separate SDR backend from HackRF. The default `scanner_node` executable does not link libbladeRF and does not require a BladeRF to be connected; this keeps handshake/VER server debugging available regardless of radio hardware. Installing the BladeRF packages below prepares the Pi OS but does not add radio commands to this executable.
+
+### Packages And Prepared Images
+
+On the Ubuntu 22.04 ARM Pi, the following packages were installed:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y bladerf libbladerf-dev \
+  bladerf-firmware-fx3 \
+  bladerf-fpga-hostedx40 bladerf-fpga-hostedx115 \
+  bladerf-fpga-hostedxa4 bladerf-fpga-hostedxa5 bladerf-fpga-hostedxa9
+```
+
+This provides `bladeRF-cli` 1.8.0, libbladeRF 2.4.1 and development headers. The package post-install scripts downloaded and verified these files under `/usr/share/Nuand/bladeRF/`:
+
+| File | Intended hardware |
+| --- | --- |
+| `bladeRF_fw.img` | FX3 firmware; shared by supported bladeRF boards |
+| `hostedx40.rbf` | bladeRF1 with the 40KLE FPGA |
+| `hostedx115.rbf` | bladeRF1 with the 115KLE FPGA |
+| `hostedxA4.rbf` | bladeRF2 xA4 |
+| `hostedxA5.rbf` | bladeRF2 xA5 |
+| `hostedxA9.rbf` | bladeRF2 xA9 |
+
+All variants are staged because the board is currently disconnected and its exact model/FPGA is unknown. Do not flash an FPGA image based only on the USB VID/PID; identify the board first. Package installation downloads files but does not write firmware/FPGA images to the radio.
+
+### USB Permissions
+
+The Ubuntu package installs udev rules for bladeRF1 (`2cf0:5246`), legacy bladeRF1 (`1d50:6066`), bladeRF2 (`2cf0:5250`) and the Cypress FX3 bootloader (`04b4:00f3`) with `TAG+="uaccess"`. For reliable access from an SSH session, this repository also contains `tools/99-nuand-bladerf-rpi.rules`, which grants mode `0660` to group `plugdev` for those IDs. It was installed on the Pi as `/etc/udev/rules.d/99-nuand-bladerf-rpi.rules`; `rpi` is already a member of `plugdev`.
+
+To reproduce or refresh the local rule, copy it from the repository root and install it on the Pi:
+
+```powershell
+scp scanner_node/tools/99-nuand-bladerf-rpi.rules rpi@10.123.71.141:/tmp/
+ssh rpi@10.123.71.141 "sudo install -m 0644 /tmp/99-nuand-bladerf-rpi.rules /etc/udev/rules.d/99-nuand-bladerf-rpi.rules"
+ssh rpi@10.123.71.141 "rm -f /tmp/99-nuand-bladerf-rpi.rules"
+ssh -tt rpi@10.123.71.141 "sudo udevadm control --reload-rules"
+```
+
+After plugging/replugging the board, check USB enumeration, node permissions, and CLI access:
+
+```bash
+lsusb | grep -Ei 'Nuand|bladeRF'
+ls -l /dev/bus/usb/*/*
+id -nG
+bladeRF-cli --version
+bladeRF-cli -p
+```
+
+Expected with a connected, accessible board: `bladeRF-cli -p` lists it. Currently the Pi reports `No devices are available`, which is expected because the BladeRF is unplugged. The package CLI and libraries are present; device-specific initialization cannot be validated until it is connected.
+
+### Firmware And FPGA Loading (Only After Model Identification)
+
+`bladeRF-cli --help` documents `-f/--flash-firmware <file>`, `-l/--load-fpga <file>` (volatile load) and `-L/--flash-fpga <file>` (persistent FPGA flash). Use the matching image from `/usr/share/Nuand/bladeRF/` only when the CLI reports that an update/load is required and the exact board variant is known. FPGA flashing is persistent; a wrong image may prevent normal operation. Do not run firmware/FPGA writes as part of routine scanner tests.
+
+The CMake project currently has no optional BladeRF backend or libbladeRF link target. The BladeRF CLI can validate hardware independently, but actual frequency control, RX capture, streaming, and protocol commands still need to be implemented and tested in a dedicated backend.
+
 ## Build
 
 Requirements: CMake 3.16+, C99 compiler, and the sibling `../cJSON` source already included in this repository.
@@ -142,7 +204,7 @@ ssh rpi@10.123.71.141 "findmnt /mnt/scaner-ram; test -w /mnt/scaner-ram && echo 
 ssh rpi@10.123.71.141 "mkdir -p /mnt/scaner-ram/orkestr-scanner/scanner_node /mnt/scaner-ram/orkestr-scanner/cJSON"
 ssh rpi@10.123.71.141 "mkdir -p /mnt/scaner-ram/orkestr-scanner/scanner_node/tools"
 scp -r scanner_node/include scanner_node/src scanner_node/tests scanner_node/CMakeLists.txt scanner_node/README.md rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/scanner_node/
-scp scanner_node/tools/demo_server_mock.py rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/scanner_node/tools/
+scp scanner_node/tools/demo_server_mock.py scanner_node/tools/99-nuand-bladerf-rpi.rules rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/scanner_node/tools/
 scp -r cJSON device.json rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/
 ```
 
@@ -217,6 +279,29 @@ Pass criteria on the Pi: `Session reply received` and `VER 1 answered with versi
 ```powershell
 Remove-NetFirewallRule -DisplayName "Orkestr UDP mock 2653"
 ```
+
+### 4a. Diagnose A Nonstandard Session Reply
+
+For diagnosis only, a separate build can accept a non-52-byte datagram from the configured endpoint and continue waiting for VER. On the Pi the diagnostic executable is `~/vlad/4vlad/scanner_node.ignore-session-size`; the strict default remains `~/vlad/4vlad/scanner_node`:
+
+```bash
+cd ~/vlad/4vlad
+./scanner_node.ignore-session-size \
+  --server 89.129.2.140 --server-port 3333 --local-port 3333 \
+  --device-json /home/vlad/4vlad/device.json --software-version 1.0.0.0 \
+  --attempts 1 --handshake-timeout 5000 --ver-timeout 5000 \
+  --ignore-session-reply-size
+```
+
+Observed on 2026-09-30: `89.129.2.140:3333` returned 626-byte datagrams. With the size bypass, the client accepted that datagram only as a diagnostic transition and then timed out waiting for VER. Thus the endpoint is reachable, but the exchange still does not match the expected C# server sequence. Do not use the diagnostic executable for normal operation; retain the strict binary as default.
+
+### Deployment Notes And Issues Seen
+
+- The first binary copied from the 32-bit `armv7l` Pi was ARM EABI/armhf. The remote `np.lora-wan.net` Pi reports `aarch64` and has only `/lib/ld-linux-aarch64.so.1`, so it could not execute that binary (`ld-linux-armhf.so.3` was absent). Rebuild natively for the target; the current strict binary is AArch64 at `/home/vlad/vlad/4vlad/scanner_node`, and the earlier armhf build is preserved as `scanner_node.armhf`.
+- The target host had native GCC but no CMake. The scanner was compiled as C99 directly from its sources. GCC terminated silently while compiling the vendored `cJSON.c` with the initial optimized one-command build; preprocessing/syntax checks passed and compiling that translation unit separately with `-O0 -fno-inline -fno-builtin` succeeded. The resulting binary passed JSON/protocol and UDP loopback tests before installation.
+- The strict AArch64 executable requires the 52-byte C# session reply. At `89.129.2.140:3333` it received 626-byte datagrams instead. The diagnostic binary accepted the datagram size from that endpoint, but no VER request arrived during the 5-second wait. This proves UDP reachability only; it does not establish a compatible handshake/session exchange.
+- `scanner_node.ignore-session-size` is intentionally separate from the strict executable. It does not decode or validate the nonstandard payload. Keep the ordinary `scanner_node` as the default and use the diagnostic variant only to investigate the remote server protocol.
+- The deployment directory `/home/vlad/vlad/4vlad` contains the binary only. Supply the device JSON path explicitly (for example `/home/vlad/4vlad/device.json`) when that file exists on the target host.
 
 ### 5. Verify Against The Real C# DemoServer
 

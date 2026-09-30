@@ -54,7 +54,7 @@ void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE],
     for (index = 0; index < SCANNER_NODE_ANTENNA_COUNT; ++index)
     {
         const ScannerAntenna *antenna = &device->antennas[index];
-        write_i32_le(output + offset, antenna->input);
+        write_i32_le(output + offset, antenna->input); // 1-16
         write_i32_le(output + offset + 4, antenna->from);
         write_i32_le(output + offset + 8, antenna->to);
         write_double_le(output + offset + 12, antenna->polar);

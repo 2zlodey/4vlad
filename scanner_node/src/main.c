@@ -31,6 +31,7 @@ typedef struct
     unsigned int attempts;
     unsigned int handshake_timeout_ms;
     unsigned int ver_timeout_ms;
+    int ignore_session_reply_size;
 } Options;
 
 static void print_usage(const char *program)
@@ -45,7 +46,9 @@ static void print_usage(const char *program)
         "  --software-version V  VER ASCII version, 1-10 bytes (default 1.0.0.0)\n"
         "  --attempts N          Handshake attempts (default 5)\n"
         "  --handshake-timeout N Handshake timeout in ms (default 2000)\n"
-        "  --ver-timeout N       VER request timeout in ms (default 3000)\n",
+        "  --ver-timeout N       VER request timeout in ms (default 3000)\n"
+        "  --ignore-session-reply-size Accept any-size datagram from the server\n"
+        "                          as the session reply (diagnostics only)\n",
         program);
 }
 
@@ -89,6 +92,11 @@ static int parse_options(int argc, char **argv, Options *options)
         {
             print_usage(argv[0]);
             return 2;
+        }
+        if (strcmp(argument, "--ignore-session-reply-size") == 0)
+        {
+            options->ignore_session_reply_size = 1;
+            continue;
         }
         if (index + 1 >= argc)
         {
@@ -212,7 +220,7 @@ static void wall_clock_parts(int64_t *seconds, int64_t *microseconds)
 }
 
 static int receive_expected(ScannerUdpSocket *socket_handle, const Options *options,
-                            unsigned int timeout_ms, size_t expected_size,
+                            unsigned int timeout_ms, size_t expected_size, int allow_size_mismatch,
                             ScannerDatagram *accepted, char *error, size_t error_size)
 {
     uint64_t deadline = monotonic_milliseconds() + timeout_ms;
@@ -239,9 +247,15 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const Options *opti
         }
         if (datagram.size != expected_size)
         {
-            fprintf(stderr, "Ignoring %lu-byte datagram; expected %lu bytes\n",
+            if (!allow_size_mismatch)
+            {
+                fprintf(stderr, "Ignoring %lu-byte datagram; expected %lu bytes\n",
+                        (unsigned long)datagram.size, (unsigned long)expected_size);
+                continue;
+            }
+            fprintf(stderr,
+                    "WARNING: accepting nonstandard %lu-byte session reply (expected %lu)\n",
                     (unsigned long)datagram.size, (unsigned long)expected_size);
-            continue;
         }
         *accepted = datagram;
         return 1;
@@ -305,7 +319,8 @@ static int run_node(const Options *options)
         printf("Handshake attempt %u/%u sent (%u bytes)\n", attempt, options->attempts,
                (unsigned int)sizeof(handshake));
         result = receive_expected(&socket_handle, options, options->handshake_timeout_ms,
-                                  SCANNER_SESSION_REPLY_SIZE, &datagram, error, sizeof(error));
+                                  SCANNER_SESSION_REPLY_SIZE, options->ignore_session_reply_size,
+                                  &datagram, error, sizeof(error));
         if (result < 0)
         {
             fprintf(stderr, "%s\n", error);
