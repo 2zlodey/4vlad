@@ -7,9 +7,8 @@
 static int check(int condition, const char *message)
 {
     if (!condition)
-    {
         fprintf(stderr, "FAIL: %s\n", message);
-    }
+
     return condition;
 }
 
@@ -51,8 +50,7 @@ int main(void)
     header.counter = 1;
     header.reply_port = client_port;
     scanner_encode_handshake(handshake, &header, &device);
-    if (!scanner_udp_send(&client, "127.0.0.1", server_port, handshake, sizeof(handshake), error,
-                          sizeof(error)))
+    if (!scanner_udp_send(&client, "127.0.0.1", server_port, handshake, sizeof(handshake), error, sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         goto cleanup;
@@ -65,10 +63,8 @@ int main(void)
         goto cleanup;
     }
 
-    if (!scanner_udp_send(&server, "127.0.0.1", client_port, session_reply, sizeof(session_reply),
-                          error, sizeof(error))
-        || !scanner_udp_send(&server, "127.0.0.1", client_port, ver_request, sizeof(ver_request),
-                             error, sizeof(error)))
+    if (!scanner_udp_send(&server, "127.0.0.1", client_port, session_reply, sizeof(session_reply), error, sizeof(error))
+        || !scanner_udp_send(&server, "127.0.0.1", client_port, ver_request, sizeof(ver_request), error, sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         goto cleanup;
@@ -84,8 +80,8 @@ int main(void)
     }
 
     if (!scanner_encode_ver_response(ver_response, request.request_id, "1.0.0.0")
-        || !scanner_udp_send(&client, "127.0.0.1", server_port, ver_response, sizeof(ver_response),
-                             error, sizeof(error)))
+        || !scanner_udp_send(&client, "127.0.0.1", server_port, ver_response, sizeof(ver_response), error,
+                             sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         goto cleanup;

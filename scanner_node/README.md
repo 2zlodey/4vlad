@@ -293,13 +293,13 @@ cd ~/vlad/4vlad
   --ignore-session-reply-size
 ```
 
-Observed on 2026-09-30: `89.129.2.140:3333` returned 626-byte datagrams. With the size bypass, the client accepted that datagram only as a diagnostic transition and then timed out waiting for VER. Thus the endpoint is reachable, but the exchange still does not match the expected C# server sequence. Do not use the diagnostic executable for normal operation; retain the strict binary as default.
+Observed on 2026-09-30 during an earlier diagnostic: configuring `89.129.2.140:3333` produced 626-byte datagrams and no VER request. This was a different endpoint/port from the production server configuration below, not evidence that the strict handshake is incompatible. Do not use the diagnostic executable for normal operation; retain the strict binary as default.
 
 ### Deployment Notes And Issues Seen
 
 - The first binary copied from the 32-bit `armv7l` Pi was ARM EABI/armhf. The remote `np.lora-wan.net` Pi reports `aarch64` and has only `/lib/ld-linux-aarch64.so.1`, so it could not execute that binary (`ld-linux-armhf.so.3` was absent). Rebuild natively for the target; the current strict binary is AArch64 at `/home/vlad/vlad/4vlad/scanner_node`, and the earlier armhf build is preserved as `scanner_node.armhf`.
 - The target host had native GCC but no CMake. The scanner was compiled as C99 directly from its sources. GCC terminated silently while compiling the vendored `cJSON.c` with the initial optimized one-command build; preprocessing/syntax checks passed and compiling that translation unit separately with `-O0 -fno-inline -fno-builtin` succeeded. The resulting binary passed JSON/protocol and UDP loopback tests before installation.
-- The strict AArch64 executable requires the 52-byte C# session reply. At `89.129.2.140:3333` it received 626-byte datagrams instead. The diagnostic binary accepted the datagram size from that endpoint, but no VER request arrived during the 5-second wait. This proves UDP reachability only; it does not establish a compatible handshake/session exchange.
+- The earlier diagnostic test against `89.129.2.140:3333` received 626-byte datagrams and did not reach VER. That result was superseded by the successful production-server test below, which used `82.165.20.164:2653`.
 - `scanner_node.ignore-session-size` is intentionally separate from the strict executable. It does not decode or validate the nonstandard payload. Keep the ordinary `scanner_node` as the default and use the diagnostic variant only to investigate the remote server protocol.
 - The deployment directory `/home/vlad/vlad/4vlad` contains the binary only. Supply the device JSON path explicitly (for example `/home/vlad/4vlad/device.json`) when that file exists on the target host.
 
@@ -312,7 +312,17 @@ dotnet run --project tools/Orkestr.DemoServer/Orkestr.csproj -- --version
 dotnet run --project tools/Orkestr.DemoServer/Orkestr.csproj -- --listen-address 0.0.0.0 --listen-port 2653
 ```
 
-Pass the exact version printed by `--version` as `--software-version` to the Pi scanner. The server should log `Application channel is ready`; the scanner should report that it answered VER. If it instead reports `INCOMPATIBLE_VERSION` or times out, verify the assembly version, IPv4 endpoint, UDP/2653 firewall rules, and that the C# server is actually listening. The mock's default `1.0.0.0` is only a default and is not proof of the real server's current version.
+Pass the exact version printed by `--version` as `--software-version` to the Pi scanner. The mock's default `1.0.0.0` is only a default and is not proof of the real server's current version.
+
+Successful production-server exchange verified on 2026-09-30 from the remote Raspberry Pi:
+
+```bash
+./scanner_node --server 82.165.20.164 --device-json ../scanner-node-build/device.json
+```
+
+The scanner sent a 626-byte handshake, accepted the 52-byte session reply, answered VER request `3` with a 14-byte `1.0.0.0` response, and exited successfully. The server logged the device ID `12345`, sent the session reply, issued VER request `3`, accepted the matching response, and reported `Application channel is ready`. It observed the client's public/NAT endpoint as `89.129.2.140:3333`; the configured server destination was `82.165.20.164:2653`. This verifies the strict handshake/session/VER path against the production server. It does not verify RF commands, which are not implemented yet.
+
+If a later run reports `INCOMPATIBLE_VERSION` or times out, verify the server's expected assembly version, IPv4 endpoint, UDP/2653 firewall rules, and that the C# server is listening.
 
 If handshake times out, first verify both addresses and listeners, then allow UDP/2653 inbound on Windows. The client deliberately ignores replies from any endpoint other than the exact configured server IP and port.
 
@@ -358,13 +368,13 @@ python -m unittest discover -s tests -p test_demo_server_mock.py -v
 
 ## Run
 
-From `scanner_node/build`, the default JSON path `../../device.json` points to the existing sample in the parent project:
+With defaults, run the node directly; the server is `82.165.20.164` and the device JSON is `../scanner-node-build/device.json` relative to the current working directory:
 
 ```powershell
-./scanner_node --server 127.0.0.1 --server-port 2653 --local-port 3333
+./scanner_node
 ```
 
-On Windows, run `scanner_node.exe` with the same options. To load and save JSON explicitly:
+Override either default with `--server` or `--device-json`. For example, to use the local mock server and the sample JSON:
 
 ```powershell
 ./scanner_node --server 127.0.0.1 --device-json ../../device.json --save-device-json ./device-copy.json

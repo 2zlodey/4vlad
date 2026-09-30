@@ -10,9 +10,7 @@
 static void set_error(char *error, unsigned long error_size, const char *message)
 {
     if (error != NULL && error_size > 0)
-    {
         snprintf(error, (size_t)error_size, "%s", message);
-    }
 }
 
 static const cJSON *required_item(const cJSON *object, const char *name)
@@ -24,9 +22,8 @@ static int read_number(const cJSON *object, const char *name, double *value)
 {
     const cJSON *item = required_item(object, name);
     if (!cJSON_IsNumber(item) || !isfinite(item->valuedouble))
-    {
         return 0;
-    }
+
     *value = item->valuedouble;
     return 1;
 }
@@ -46,17 +43,15 @@ static int read_int32(const cJSON *object, const char *name, int32_t *value)
 static int parse_antenna(const cJSON *item, ScannerAntenna *antenna)
 {
     if (!cJSON_IsObject(item))
-    {
         return 0;
-    }
+
     return read_int32(item, "in", &antenna->input) && read_int32(item, "from", &antenna->from)
            && read_int32(item, "to", &antenna->to) && read_number(item, "polar", &antenna->polar)
            && read_int32(item, "type", &antenna->type) && read_int32(item, "dBi", &antenna->dbi)
            && read_number(item, "direction", &antenna->direction);
 }
 
-int device_load_json(const char *filename, ScannerDevice *device, char *error,
-                     unsigned long error_size)
+int device_load_json(const char *filename, ScannerDevice *device, char *error, unsigned long error_size)
 {
     FILE *file;
     long file_size;
@@ -79,8 +74,8 @@ int device_load_json(const char *filename, ScannerDevice *device, char *error,
         set_error(error, error_size, "Cannot open device JSON file");
         return 0;
     }
-    if (fseek(file, 0, SEEK_END) != 0 || (file_size = ftell(file)) <= 0
-        || fseek(file, 0, SEEK_SET) != 0 || file_size > 1024 * 1024)
+    if (fseek(file, 0, SEEK_END) != 0 || (file_size = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) != 0
+        || file_size > 1024 * 1024)
     {
         fclose(file);
         set_error(error, error_size, "Invalid or oversized device JSON file");
@@ -115,15 +110,12 @@ int device_load_json(const char *filename, ScannerDevice *device, char *error,
 
     coord = required_item(root, "coord");
     rfin = required_item(root, "rfin");
-    if (!cJSON_IsObject(coord) || !cJSON_IsArray(rfin)
-        || cJSON_GetArraySize(rfin) != SCANNER_NODE_ANTENNA_COUNT
+    if (!cJSON_IsObject(coord) || !cJSON_IsArray(rfin) || cJSON_GetArraySize(rfin) != SCANNER_NODE_ANTENNA_COUNT
         || !read_int32(root, "id", &parsed.id) || !read_number(root, "version", &parsed.version)
-        || !read_number(coord, "lon", &parsed.longitude)
-        || !read_number(coord, "lat", &parsed.latitude))
+        || !read_number(coord, "lon", &parsed.longitude) || !read_number(coord, "lat", &parsed.latitude))
     {
         cJSON_Delete(root);
-        set_error(error, error_size,
-                  "Device JSON requires id/version, coord lon/lat and exactly 16 antennas");
+        set_error(error, error_size, "Device JSON requires id/version, coord lon/lat and exactly 16 antennas");
         return 0;
     }
 
@@ -146,8 +138,7 @@ static int add_number(cJSON *object, const char *name, double value)
     return cJSON_AddNumberToObject(object, name, value) != NULL;
 }
 
-int device_save_json(const char *filename, const ScannerDevice *device, char *error,
-                     unsigned long error_size)
+int device_save_json(const char *filename, const ScannerDevice *device, char *error, unsigned long error_size)
 {
     cJSON *root = NULL;
     cJSON *coord = NULL;
@@ -166,8 +157,7 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
     coord = cJSON_CreateObject();
     rfin = cJSON_CreateArray();
     if (root == NULL || coord == NULL || rfin == NULL || !add_number(root, "id", device->id)
-        || !add_number(root, "version", device->version)
-        || !add_number(coord, "lon", device->longitude)
+        || !add_number(root, "version", device->version) || !add_number(coord, "lon", device->longitude)
         || !add_number(coord, "lat", device->latitude))
     {
         set_error(error, error_size, "Could not allocate device JSON structure");
@@ -182,9 +172,8 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
     {
         const ScannerAntenna *antenna = &device->antennas[index];
         cJSON *item = cJSON_CreateObject();
-        if (item == NULL || !add_number(item, "in", antenna->input)
-            || !add_number(item, "from", antenna->from) || !add_number(item, "to", antenna->to)
-            || !add_number(item, "polar", antenna->polar)
+        if (item == NULL || !add_number(item, "in", antenna->input) || !add_number(item, "from", antenna->from)
+            || !add_number(item, "to", antenna->to) || !add_number(item, "polar", antenna->polar)
             || !add_number(item, "type", antenna->type) || !add_number(item, "dBi", antenna->dbi)
             || !add_number(item, "direction", antenna->direction))
         {
@@ -223,9 +212,8 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
 
 cleanup:
     if (file != NULL)
-    {
         fclose(file);
-    }
+
     free(json_text);
     cJSON_Delete(rfin);
     cJSON_Delete(coord);

@@ -17,8 +17,7 @@ static void write_le(uint8_t *output, uint64_t value, size_t size)
 
 static uint32_t read_u32_le(const uint8_t *input)
 {
-    return (uint32_t)input[0] | ((uint32_t)input[1] << 8) | ((uint32_t)input[2] << 16)
-           | ((uint32_t)input[3] << 24);
+    return (uint32_t)input[0] | ((uint32_t)input[1] << 8) | ((uint32_t)input[2] << 16) | ((uint32_t)input[3] << 24);
 }
 
 static void write_double_le(uint8_t *output, double value)
@@ -28,13 +27,10 @@ static void write_double_le(uint8_t *output, double value)
     write_le(output, bits, sizeof(bits));
 }
 
-static void write_i32_le(uint8_t *output, int32_t value)
-{
-    write_le(output, (uint32_t)value, sizeof(uint32_t));
-}
+static void write_i32_le(uint8_t *output, int32_t value) { write_le(output, (uint32_t)value, sizeof(uint32_t)); }
 
-void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE],
-                              const ScannerHandshakeHeader *header, const ScannerDevice *device)
+void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
+                              const ScannerDevice *device)
 {
     size_t offset = 22;
     size_t index;
@@ -67,36 +63,29 @@ void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE],
 
 int scanner_decode_ver_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE
-        || bytes[4] != SCANNER_VER_COMMAND)
-    {
+    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE || bytes[4] != SCANNER_VER_COMMAND)
         return 0;
-    }
+
     request->request_id = read_u32_le(bytes);
     return 1;
 }
 
-int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id,
-                                const char *version)
+int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)
 {
     size_t length;
     size_t index;
 
     if (output == NULL || version == NULL)
-    {
         return 0;
-    }
+
     length = strlen(version);
     if (length == 0 || length > 10)
-    {
         return 0;
-    }
+
     for (index = 0; index < length; ++index)
     {
         if ((unsigned char)version[index] > 0x7f)
-        {
             return 0;
-        }
     }
 
     memset(output, 0, SCANNER_VER_RESPONSE_SIZE);

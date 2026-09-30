@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
-
 #endif
 
 #include "udp_socket.h"
@@ -20,9 +19,8 @@
 static void set_error(char *error, size_t error_size, const char *operation, int code)
 {
     if (error == NULL || error_size == 0)
-    {
         return;
-    }
+
 #ifdef _WIN32
     snprintf(error, error_size, "%s failed with Winsock error %d", operation, code);
 #else
@@ -68,8 +66,8 @@ int scanner_udp_open(ScannerUdpSocket *socket_handle, char *error, size_t error_
     return 1;
 }
 
-static int make_endpoint(const char *address, uint16_t port, struct sockaddr_in *endpoint,
-                         char *error, size_t error_size)
+static int make_endpoint(const char *address, uint16_t port, struct sockaddr_in *endpoint, char *error,
+                         size_t error_size)
 {
     memset(endpoint, 0, sizeof(*endpoint));
     endpoint->sin_family = AF_INET;
@@ -78,16 +76,15 @@ static int make_endpoint(const char *address, uint16_t port, struct sockaddr_in 
     {
         if (error != NULL && error_size > 0)
         {
-            snprintf(error, error_size, "Invalid IPv4 address: %s",
-                     address == NULL ? "(null)" : address);
+            snprintf(error, error_size, "Invalid IPv4 address: %s", address == NULL ? "(null)" : address);
         }
         return 0;
     }
     return 1;
 }
 
-int scanner_udp_bind(ScannerUdpSocket *socket_handle, const char *address, uint16_t port,
-                     char *error, size_t error_size)
+int scanner_udp_bind(ScannerUdpSocket *socket_handle, const char *address, uint16_t port, char *error,
+                     size_t error_size)
 {
     struct sockaddr_in endpoint;
     if (socket_handle == NULL || socket_handle->handle == SCANNER_INVALID_SOCKET
@@ -107,8 +104,7 @@ int scanner_udp_bind(ScannerUdpSocket *socket_handle, const char *address, uint1
     return 1;
 }
 
-int scanner_udp_get_local_port(ScannerUdpSocket *socket_handle, uint16_t *port, char *error,
-                               size_t error_size)
+int scanner_udp_get_local_port(ScannerUdpSocket *socket_handle, uint16_t *port, char *error, size_t error_size)
 {
     struct sockaddr_in endpoint;
 #ifdef _WIN32
@@ -135,12 +131,12 @@ int scanner_udp_get_local_port(ScannerUdpSocket *socket_handle, uint16_t *port, 
     return 1;
 }
 
-int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint16_t port,
-                     const uint8_t *data, size_t size, char *error, size_t error_size)
+int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint16_t port, const uint8_t *data,
+                     size_t size, char *error, size_t error_size)
 {
     struct sockaddr_in endpoint;
-    if (socket_handle == NULL || socket_handle->handle == SCANNER_INVALID_SOCKET || data == NULL
-        || size == 0 || !make_endpoint(address, port, &endpoint, error, error_size))
+    if (socket_handle == NULL || socket_handle->handle == SCANNER_INVALID_SOCKET || data == NULL || size == 0
+        || !make_endpoint(address, port, &endpoint, error, error_size))
     {
         return 0;
     }
@@ -152,8 +148,8 @@ int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint1
             set_error(error, error_size, "sendto size", WSAEMSGSIZE);
             return 0;
         }
-        sent = sendto(socket_handle->handle, (const char *)data, (int)size, 0,
-                      (const struct sockaddr *)&endpoint, (int)sizeof(endpoint));
+        sent = sendto(socket_handle->handle, (const char *)data, (int)size, 0, (const struct sockaddr *)&endpoint,
+                      (int)sizeof(endpoint));
         if (sent == SOCKET_ERROR || (size_t)sent != size)
         {
             set_error(error, error_size, "sendto", WSAGetLastError());
@@ -162,8 +158,8 @@ int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint1
     }
 #else
     {
-        ssize_t sent = sendto(socket_handle->handle, data, size, 0,
-                              (const struct sockaddr *)&endpoint, sizeof(endpoint));
+        ssize_t sent = sendto(socket_handle->handle, data, size, 0, (const struct sockaddr *)&endpoint,
+                              sizeof(endpoint));
         if (sent < 0 || (size_t)sent != size)
         {
             set_error(error, error_size, "sendto", errno);
@@ -174,8 +170,8 @@ int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint1
     return 1;
 }
 
-int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms,
-                        ScannerDatagram *datagram, char *error, size_t error_size)
+int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms, ScannerDatagram *datagram,
+                        char *error, size_t error_size)
 {
     fd_set read_set;
     struct timeval timeout;
@@ -186,8 +182,7 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
     socklen_t source_size = (socklen_t)sizeof(datagram->source);
 #endif
 
-    if (socket_handle == NULL || datagram == NULL
-        || socket_handle->handle == SCANNER_INVALID_SOCKET)
+    if (socket_handle == NULL || datagram == NULL || socket_handle->handle == SCANNER_INVALID_SOCKET)
     {
         set_error(error, error_size, "recvfrom argument", 0);
         return -1;
@@ -202,9 +197,8 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
     ready = select(socket_handle->handle + 1, &read_set, NULL, NULL, &timeout);
 #endif
     if (ready == 0)
-    {
         return 0;
-    }
+
     if (ready < 0)
     {
 #ifdef _WIN32
@@ -216,16 +210,14 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
     }
 #ifdef _WIN32
     {
-        int received = recvfrom(socket_handle->handle, (char *)datagram->payload,
-                                (int)sizeof(datagram->payload), 0,
+        int received = recvfrom(socket_handle->handle, (char *)datagram->payload, (int)sizeof(datagram->payload), 0,
                                 (struct sockaddr *)&datagram->source, &source_size);
         if (received == SOCKET_ERROR)
         {
             int code = WSAGetLastError();
             if (code == WSAECONNRESET)
-            {
                 return 0;
-            }
+
             set_error(error, error_size, "recvfrom", code);
             return -1;
         }
@@ -233,8 +225,7 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
     }
 #else
     {
-        ssize_t received = recvfrom(socket_handle->handle, datagram->payload,
-                                    sizeof(datagram->payload), 0,
+        ssize_t received = recvfrom(socket_handle->handle, datagram->payload, sizeof(datagram->payload), 0,
                                     (struct sockaddr *)&datagram->source, &source_size);
         if (received < 0)
         {
@@ -254,9 +245,8 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
 void scanner_udp_close(ScannerUdpSocket *socket_handle)
 {
     if (socket_handle == NULL)
-    {
         return;
-    }
+
     if (socket_handle->handle != SCANNER_INVALID_SOCKET)
     {
 #ifdef _WIN32
@@ -278,20 +268,17 @@ void scanner_udp_close(ScannerUdpSocket *socket_handle)
 int scanner_same_endpoint(const struct sockaddr_in *endpoint, const char *address, uint16_t port)
 {
     struct sockaddr_in expected;
-    return endpoint != NULL && make_endpoint(address, port, &expected, NULL, 0)
-           && endpoint->sin_family == AF_INET && endpoint->sin_port == expected.sin_port
-           && endpoint->sin_addr.s_addr == expected.sin_addr.s_addr;
+    return endpoint != NULL && make_endpoint(address, port, &expected, NULL, 0) && endpoint->sin_family == AF_INET
+           && endpoint->sin_port == expected.sin_port && endpoint->sin_addr.s_addr == expected.sin_addr.s_addr;
 }
 
 void scanner_endpoint_string(const struct sockaddr_in *endpoint, char *output, size_t output_size)
 {
     char address[INET_ADDRSTRLEN];
     if (output == NULL || output_size == 0)
-    {
         return;
-    }
-    if (endpoint == NULL
-        || inet_ntop(AF_INET, &endpoint->sin_addr, address, sizeof(address)) == NULL)
+
+    if (endpoint == NULL || inet_ntop(AF_INET, &endpoint->sin_addr, address, sizeof(address)) == NULL)
     {
         snprintf(output, output_size, "<invalid endpoint>");
         return;

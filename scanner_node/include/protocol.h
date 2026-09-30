@@ -25,10 +25,9 @@ typedef struct
     uint32_t request_id;
 } ScannerVerRequest;
 
-void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE],
-                              const ScannerHandshakeHeader *header, const ScannerDevice *device);
+void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
+                              const ScannerDevice *device);
 int scanner_decode_ver_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request);
-int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id,
-                                const char *version);
+int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version);
 
 #endif

@@ -37,11 +37,12 @@ typedef struct
 static void print_usage(const char *program)
 {
     printf(
-        "Usage: %s --server IPv4 [options]\n"
+        "Usage: %s [options]\n"
+        "  --server IPv4         Server IPv4 address (default 82.165.20.164)\n"
         "  --server-port N       Server UDP port (default 2653)\n"
         "  --bind-address IPv4   Local bind address (default 0.0.0.0)\n"
         "  --local-port N        Local/reply UDP port (default 3333)\n"
-        "  --device-json PATH    Input device JSON (default ../../device.json)\n"
+        "  --device-json PATH    Input device JSON (default ../scanner-node-build/device.json)\n"
         "  --save-device-json P  Write loaded Device JSON to P, then continue\n"
         "  --software-version V  VER ASCII version, 1-10 bytes (default 1.0.0.0)\n"
         "  --attempts N          Handshake attempts (default 5)\n"
@@ -57,15 +58,13 @@ static int parse_unsigned(const char *text, unsigned long maximum, unsigned long
     char *end = NULL;
     unsigned long parsed;
     if (text == NULL || text[0] == '\0' || text[0] == '-')
-    {
         return 0;
-    }
+
     errno = 0;
     parsed = strtoul(text, &end, 10);
     if (errno != 0 || end == text || *end != '\0' || parsed == 0 || parsed > maximum)
-    {
         return 0;
-    }
+
     *value = parsed;
     return 1;
 }
@@ -74,8 +73,9 @@ static int parse_options(int argc, char **argv, Options *options)
 {
     int index;
     memset(options, 0, sizeof(*options));
+    options->server_address = "82.165.20.164";
     options->bind_address = "0.0.0.0";
-    options->device_json = "../../device.json";
+    options->device_json = "../scanner-node-build/device.json";
     options->software_version = "1.0.0.0";
     options->server_port = 2653;
     options->local_port = 3333;
@@ -173,11 +173,6 @@ static int parse_options(int argc, char **argv, Options *options)
             return 0;
         }
     }
-    if (options->server_address == NULL)
-    {
-        fprintf(stderr, "--server is required\n");
-        return 0;
-    }
     return 1;
 }
 
@@ -219,9 +214,9 @@ static void wall_clock_parts(int64_t *seconds, int64_t *microseconds)
 #endif
 }
 
-static int receive_expected(ScannerUdpSocket *socket_handle, const Options *options,
-                            unsigned int timeout_ms, size_t expected_size, int allow_size_mismatch,
-                            ScannerDatagram *accepted, char *error, size_t error_size)
+static int receive_expected(ScannerUdpSocket *socket_handle, const Options *options, unsigned int timeout_ms,
+                            size_t expected_size, int allow_size_mismatch, ScannerDatagram *accepted, char *error,
+                            size_t error_size)
 {
     uint64_t deadline = monotonic_milliseconds() + timeout_ms;
     while (monotonic_milliseconds() < deadline)
@@ -231,13 +226,11 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const Options *opti
         ScannerDatagram datagram;
         int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
         if (result < 0)
-        {
             return -1;
-        }
+
         if (result == 0)
-        {
             return 0;
-        }
+
         if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
         {
             char source[64];
@@ -249,12 +242,11 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const Options *opti
         {
             if (!allow_size_mismatch)
             {
-                fprintf(stderr, "Ignoring %lu-byte datagram; expected %lu bytes\n",
-                        (unsigned long)datagram.size, (unsigned long)expected_size);
+                fprintf(stderr, "Ignoring %lu-byte datagram; expected %lu bytes\n", (unsigned long)datagram.size,
+                        (unsigned long)expected_size);
                 continue;
             }
-            fprintf(stderr,
-                    "WARNING: accepting nonstandard %lu-byte session reply (expected %lu)\n",
+            fprintf(stderr, "WARNING: accepting nonstandard %lu-byte session reply (expected %lu)\n",
                     (unsigned long)datagram.size, (unsigned long)expected_size);
         }
         *accepted = datagram;
@@ -292,8 +284,7 @@ static int run_node(const Options *options)
         fprintf(stderr, "%s\n", error);
         return 0;
     }
-    if (!scanner_udp_bind(&socket_handle, options->bind_address, options->local_port, error,
-                          sizeof(error)))
+    if (!scanner_udp_bind(&socket_handle, options->bind_address, options->local_port, error, sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         goto cleanup;
@@ -305,31 +296,28 @@ static int run_node(const Options *options)
     scanner_encode_handshake(handshake, &header, &device);
 
     printf("Scanner node %" PRId32 " -> %s:%u (local %s:%u)\n", device.id, options->server_address,
-           (unsigned int)options->server_port, options->bind_address,
-           (unsigned int)options->local_port);
+           (unsigned int)options->server_port, options->bind_address, (unsigned int)options->local_port);
 
     for (attempt = 1; attempt <= options->attempts; ++attempt)
     {
-        if (!scanner_udp_send(&socket_handle, options->server_address, options->server_port,
-                              handshake, sizeof(handshake), error, sizeof(error)))
+        if (!scanner_udp_send(&socket_handle, options->server_address, options->server_port, handshake,
+                              sizeof(handshake), error, sizeof(error)))
         {
             fprintf(stderr, "%s\n", error);
             goto cleanup;
         }
         printf("Handshake attempt %u/%u sent (%u bytes)\n", attempt, options->attempts,
                (unsigned int)sizeof(handshake));
-        result = receive_expected(&socket_handle, options, options->handshake_timeout_ms,
-                                  SCANNER_SESSION_REPLY_SIZE, options->ignore_session_reply_size,
-                                  &datagram, error, sizeof(error));
+        result = receive_expected(&socket_handle, options, options->handshake_timeout_ms, SCANNER_SESSION_REPLY_SIZE,
+                                  options->ignore_session_reply_size, &datagram, error, sizeof(error));
         if (result < 0)
         {
             fprintf(stderr, "%s\n", error);
             goto cleanup;
         }
         if (result == 1)
-        {
             break;
-        }
+
         fprintf(stderr, "No valid session reply before timeout\n");
     }
     if (attempt > options->attempts)
@@ -347,19 +335,16 @@ static int run_node(const Options *options)
             unsigned int remaining = (unsigned int)(deadline - now);
             ScannerVerRequest request;
             uint8_t response[SCANNER_VER_RESPONSE_SIZE];
-            result = scanner_udp_receive(&socket_handle, remaining, &datagram, error,
-                                         sizeof(error));
+            result = scanner_udp_receive(&socket_handle, remaining, &datagram, error, sizeof(error));
             if (result < 0)
             {
                 fprintf(stderr, "%s\n", error);
                 goto cleanup;
             }
             if (result == 0)
-            {
                 break;
-            }
-            if (!scanner_same_endpoint(&datagram.source, options->server_address,
-                                       options->server_port))
+
+            if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
             {
                 char source[64];
                 scanner_endpoint_string(&datagram.source, source, sizeof(source));
@@ -371,14 +356,13 @@ static int run_node(const Options *options)
                 fprintf(stderr, "Ignoring malformed or unsupported command datagram\n");
                 continue;
             }
-            if (!scanner_encode_ver_response(response, request.request_id,
-                                             options->software_version))
+            if (!scanner_encode_ver_response(response, request.request_id, options->software_version))
             {
                 fprintf(stderr, "Invalid VER software version\n");
                 goto cleanup;
             }
-            if (!scanner_udp_send(&socket_handle, options->server_address, options->server_port,
-                                  response, sizeof(response), error, sizeof(error)))
+            if (!scanner_udp_send(&socket_handle, options->server_address, options->server_port, response,
+                                  sizeof(response), error, sizeof(error)))
             {
                 fprintf(stderr, "%s\n", error);
                 goto cleanup;
@@ -401,9 +385,8 @@ int main(int argc, char **argv)
     Options options;
     int parsed = parse_options(argc, argv, &options);
     if (parsed == 2)
-    {
         return 0;
-    }
+
     if (!parsed)
     {
         print_usage(argv[0]);

@@ -25,9 +25,7 @@ typedef struct
     ScannerAntenna antennas[SCANNER_NODE_ANTENNA_COUNT];
 } ScannerDevice;
 
-int device_load_json(const char *filename, ScannerDevice *device, char *error,
-                     unsigned long error_size);
-int device_save_json(const char *filename, const ScannerDevice *device, char *error,
-                     unsigned long error_size);
+int device_load_json(const char *filename, ScannerDevice *device, char *error, unsigned long error_size);
+int device_save_json(const char *filename, const ScannerDevice *device, char *error, unsigned long error_size);
 
 #endif
