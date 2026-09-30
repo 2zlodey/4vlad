@@ -37,6 +37,65 @@ Input/output uses the same schema as the original `device.c`:
 
 `rfin` must contain exactly 16 objects. Integer fields are checked as signed 32-bit values; all number fields must be finite. The built-in `--save-device-json PATH` writes a normalized copy of the loaded device to the requested path. It is opt-in and does not modify the input file unless both paths name the same file.
 
+## HackRF Hardware Setup
+
+### Default Hardware-Free Build
+
+The default `scanner_node` target is network-only: `CMakeLists.txt` does not include or link libhackrf, and the executable does not open the SDR. It can be built and used for JSON, handshake, and VER debugging even on a system without HackRF packages or hardware. Installing libhackrf on the Pi does not change this binary. RF configuration, capture, measurement, and corresponding network command handlers are not implemented in `scanner_node` yet.
+
+Verify that the deployed/default executable remains independent of libhackrf with:
+
+```bash
+ldd ./scanner_node | grep -i hackrf || echo "No libhackrf dependency (network-only build)"
+./scanner_node --help
+```
+
+### Install And Configure HackRF On Raspberry Pi
+
+On the verified Ubuntu 22.04 ARM Pi, the following packages were available and installed:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y hackrf libhackrf-dev
+```
+
+`hackrf` supplies `hackrf_info`/`hackrf_sweep`; `libhackrf-dev` supplies the headers and link library, and depends on the runtime `libhackrf0`. The package installs `/lib/udev/rules.d/60-libhackrf0.rules`, including a HackRF One rule for USB VID/PID `1d50:6089`, mode `0660`, group `plugdev`.
+
+Check the connected device and determine its current USB node/sysfs name (bus/device numbers can change after reconnect):
+
+```bash
+lsusb -d 1d50:6089
+DEVICE_NODE=$(lsusb -d 1d50:6089 | sed -n 's/Bus \([0-9]*\) Device \([0-9]*\):.*/\/dev\/bus\/usb\/\1\/\2/p')
+UDEV_PATH=$(udevadm info --query=path --name="$DEVICE_NODE")
+USB_SYSNAME=${UDEV_PATH##*/}
+printf 'device=%s sysname=%s\n' "$DEVICE_NODE" "$USB_SYSNAME"
+```
+
+If the device was already plugged in during package installation, reload the packaged rule and trigger only that USB device:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --subsystem-match=usb --sysname-match="$USB_SYSNAME"
+sudo udevadm settle
+ls -l "$DEVICE_NODE"
+id -nG
+```
+
+Expected: the USB node is `root:plugdev` with mode `crw-rw----`, and `rpi` belongs to `plugdev`. If the group was newly added to the user, start a new login session before testing. On the verified Pi, `hackrf_info` then opened the radio as `rpi` without sudo and reported HackRF One, firmware `n_230411`, API `1.07`.
+
+Run a one-shot receive-only smoke test (no RF transmission):
+
+```bash
+hackrf_info
+hackrf_sweep -f 88:108 -w 1000000 -1
+```
+
+Expected: `hackrf_info` reports the board and firmware; `hackrf_sweep` prints measurement bins for 88–108 MHz and exits after one sweep. This tests USB/libhackrf RX access, not the scanner's command handlers.
+
+### Future Hardware Integration
+
+When RF commands are added, keep libhackrf optional: a hardware-enabled CMake build should explicitly discover/link libhackrf, while the default network-only build remains independent. Hardware initialization errors should not prevent the network-only handshake/VER debugging path. Test the hardware backend separately with device detection, frequency/sample-rate/gain configuration, bounded RX capture, and a known RF source before wiring command opcodes to it.
+
 ## Build
 
 Requirements: CMake 3.16+, C99 compiler, and the sibling `../cJSON` source already included in this repository.
