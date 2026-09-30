@@ -4,14 +4,12 @@
 #include <stdio.h>
 
 #pragma pack(push, 1)
-typedef struct
-{
+typedef struct {
     double lon;
     double lat;
 } Coordinates;
 
-typedef struct
-{
+typedef struct {
     int in;
     int from;
     int to;
@@ -20,8 +18,8 @@ typedef struct
     int dBi;
     double direction;
 } Antenna;
-typedef struct
-{
+typedef struct {
+
     int id;
     double version;
     Coordinates coord;
@@ -29,7 +27,9 @@ typedef struct
 } Device;
 #pragma pack(pop)
 
+
 int device_save_json(const char *filename, const Device *dev);
 int device_load_json(const char *filename, Device *dev);
 
 #endif
+
