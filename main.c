@@ -232,23 +232,23 @@ int sendHS(const HandShake *dev)
         GOOD++;
         printf("Сервер ответил. Получено %zd байт\n", received);
 
-        unsigned char command_response[REQUEST_ID_SIZE + 1 + VERSION_SIZE];
-        size_t command_response_size = build_command_response(response, (size_t)received,
-                                                              command_response);
-        if (command_response_size == 0)
-        {
-            fprintf(stderr, "Некорректный пакет команды: request_id отсутствует\n");
-            close(sock);
-            return -1;
-        }
-        if (udp_send(sock, command_response, command_response_size, &response_addr) != 0)
-        {
-            fprintf(stderr, "Ошибка отправки ответа на команду\n");
-            close(sock);
-            return -1;
-        }
-        printf("Ответ на команду отправлен: %zu байт\n", command_response_size);
-        break;
+        // unsigned char command_response[REQUEST_ID_SIZE + 1 + VERSION_SIZE];
+        // size_t command_response_size = build_command_response(response, (size_t)received,
+        //                                                       command_response);
+        // if (command_response_size == 0)
+        // {
+        //     fprintf(stderr, "Некорректный пакет команды: request_id отсутствует\n");
+        //     close(sock);
+        //     return -1;
+        // }
+        // if (udp_send(sock, command_response, command_response_size, &response_addr) != 0)
+        // {
+        //     fprintf(stderr, "Ошибка отправки ответа на команду\n");
+        //     close(sock);
+        //     return -1;
+        // }
+        // printf("Ответ на команду отправлен: %zu байт\n", command_response_size);
+        // break;
     }
     // ДАЛЬНЕЙШИЙ ДИАЛОГ
     printf("Переходим в режим диалога\n");
