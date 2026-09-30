@@ -57,6 +57,121 @@ ctest --test-dir build -C Release --output-on-failure
 
 CMake uses Winsock (`ws2_32`) on Windows and POSIX sockets on Linux/macOS.
 
+## Manual Deployment And Full Check
+
+Run these steps from the `4vlad` repository root unless a command says otherwise. The Raspberry Pi deployment verified on 2026-09-30 used `rpi@10.123.71.141` and its existing writable tmpfs at `/mnt/scaner-ram` (512 MiB). RAM-disk contents disappear at reboot. Check the current mount and Windows/Pi addresses before reusing the commands; DHCP may change them.
+
+### 1. Validate On Windows
+
+From `scanner_node`:
+
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build --output-on-failure
+python -m unittest discover -s tests -p test_demo_server_mock.py -v
+```
+
+Expected: both CTest cases and all five Python tests pass.
+
+### 2. Copy Sources To The Pi RAM Disk
+
+Check that the RAM disk exists and is writable; this deployment does not need sudo when that is true:
+
+```powershell
+ssh rpi@10.123.71.141 "findmnt /mnt/scaner-ram; test -w /mnt/scaner-ram && echo RAM_DISK_WRITABLE"
+ssh rpi@10.123.71.141 "mkdir -p /mnt/scaner-ram/orkestr-scanner/scanner_node /mnt/scaner-ram/orkestr-scanner/cJSON"
+ssh rpi@10.123.71.141 "mkdir -p /mnt/scaner-ram/orkestr-scanner/scanner_node/tools"
+scp -r scanner_node/include scanner_node/src scanner_node/tests scanner_node/CMakeLists.txt scanner_node/README.md rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/scanner_node/
+scp scanner_node/tools/demo_server_mock.py rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/scanner_node/tools/
+scp -r cJSON device.json rpi@10.123.71.141:/mnt/scaner-ram/orkestr-scanner/
+```
+
+If `/mnt/scaner-ram` is not mounted, create a temporary 512 MiB tmpfs (contents will be lost on reboot):
+
+```bash
+sudo mkdir -p /mnt/scaner-ram
+sudo mount -t tmpfs -o size=512M,mode=0755,uid=$(id -u),gid=$(id -g) tmpfs /mnt/scaner-ram
+findmnt /mnt/scaner-ram
+test -w /mnt/scaner-ram && echo RAM_DISK_WRITABLE
+```
+
+The `sudo mount` step may prompt for the Pi account password. It is not needed when the prepared RAM disk is already mounted and writable.
+
+The commands above intentionally do not copy local `build/` output: the Pi compiles natively for ARM. SSH/SCP prompts for the Pi account password interactively.
+
+### 3. Build And Run Native Tests On The Pi
+
+The verified Pi image has GCC but not CMake/Make, so use the direct C99 build from the deployed project directory:
+
+```bash
+cd /mnt/scaner-ram/orkestr-scanner/scanner_node
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
+  -Iinclude -I../cJSON \
+  src/main.c src/device_config.c src/protocol.c src/udp_socket.c \
+  ../cJSON/cJSON.c -lm -o scanner_node
+
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
+  -Iinclude -I../cJSON \
+  tests/protocol_tests.c src/device_config.c src/protocol.c ../cJSON/cJSON.c \
+  -lm -o scanner_protocol_tests
+./scanner_protocol_tests ../device.json ./device-roundtrip.json
+
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
+  -Iinclude tests/udp_integration_tests.c src/udp_socket.c src/protocol.c \
+  -lm -o scanner_udp_integration_tests
+./scanner_udp_integration_tests
+./scanner_node --help
+```
+
+Expected: `scanner_protocol_tests` exits 0 after JSON load/save/load and packet checks; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
+
+### 4. Verify Pi To Windows Mock Across The LAN
+
+The last successful LAN test used Windows Wi-Fi `10.123.71.169` and Pi `10.123.71.141`. Recheck with `ipconfig` and `hostname -I` if addresses have changed. Check the Wi-Fi firewall category with `Get-NetConnectionProfile`; in an Administrator PowerShell, add the rule for that category (`Private`, `Public`, or `Domain`), then start the mock from `scanner_node`:
+
+```powershell
+Get-NetConnectionProfile | Format-Table InterfaceAlias, NetworkCategory
+```
+
+```powershell
+New-NetFirewallRule -DisplayName "Orkestr UDP mock 2653" -Direction Inbound -Protocol UDP -LocalPort 2653 -Action Allow -Profile Private
+```
+
+Replace `Private` in the rule with the Wi-Fi profile shown by the preceding command if they differ.
+
+```powershell
+python tools/demo_server_mock.py --bind-address 0.0.0.0 --port 2653 --version 1.0.0.0 --timeout 30 --clients 1
+```
+
+Allow inbound UDP/2653 through Windows Firewall for the active network profile. Then, on the Pi:
+
+```bash
+cd /mnt/scaner-ram/orkestr-scanner/scanner_node
+./scanner_node --server 10.123.71.169 --server-port 2653 --local-port 3333 \
+  --device-json ../device.json --software-version 1.0.0.0 \
+  --attempts 1 --handshake-timeout 5000 --ver-timeout 3000
+```
+
+Pass criteria on the Pi: `Session reply received` and `VER 1 answered with version 1.0.0.0`. Pass criteria in the Windows mock: `OK device_id=12345 ... client=10.123.71.141:3333 reply_port=3333 VER id=1 version='1.0.0.0'`. Exit status from the Pi command should be 0. This proves network reachability, both directions, packet sizes, reply port, request correlation, and version encoding; it does not test RF hardware. Remove the temporary rule afterwards:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "Orkestr UDP mock 2653"
+```
+
+### 5. Verify Against The Real C# DemoServer
+
+Use a .NET 10 SDK. Note that the current checkout is missing the project referenced by `tools/Orkestr.DemoServer/Orkestr.csproj`: `tools/common/Orkestr.Common.Logging/Orkestr.Common.Logging.csproj`. Restore that dependency before expecting a source build to work. Once it is present, from the `4vlad` root query the built server version and run the server in separate terminals:
+
+```powershell
+dotnet run --project tools/Orkestr.DemoServer/Orkestr.csproj -- --version
+dotnet run --project tools/Orkestr.DemoServer/Orkestr.csproj -- --listen-address 0.0.0.0 --listen-port 2653
+```
+
+Pass the exact version printed by `--version` as `--software-version` to the Pi scanner. The server should log `Application channel is ready`; the scanner should report that it answered VER. If it instead reports `INCOMPATIBLE_VERSION` or times out, verify the assembly version, IPv4 endpoint, UDP/2653 firewall rules, and that the C# server is actually listening. The mock's default `1.0.0.0` is only a default and is not proof of the real server's current version.
+
+If handshake times out, first verify both addresses and listeners, then allow UDP/2653 inbound on Windows. The client deliberately ignores replies from any endpoint other than the exact configured server IP and port.
+
 ## Python DemoServer mock
 
 `tools/demo_server_mock.py` uses only the Python standard library. It validates a 626-byte handshake, sends a 52-byte session reply, issues a server-initiated VER request, and validates the client's 14-byte response including `RequestId` and all ten version bytes. It is a protocol test fixture, not a production server; it does not implement the device registry, command scheduling, cryptography, or later commands.
@@ -80,7 +195,9 @@ For a Raspberry Pi test, bind the mock to the PC's LAN interfaces and use the PC
 python tools/demo_server_mock.py --bind-address 0.0.0.0 --port 2653 --clients 0
 ```
 
-Allow inbound UDP port 2653 in Windows Firewall for the test. On the Pi, run from its deployed `scanner_node` directory:
+For LAN testing, add/remove the temporary Windows Firewall rule as shown in step 4 above.
+
+On the Pi, run from its deployed `scanner_node` directory:
 
 ```bash
 ./scanner_node --server 10.123.71.169 --server-port 2653 --local-port 3333 \
