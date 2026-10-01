@@ -1,6 +1,6 @@
 # Orkestr Scanner Node
 
-Portable C99 UDP client that initiates the DemoServer handshake and answers its VER command. The implementation is isolated from the existing prototype in the parent directory.
+Portable C99 UDP client that performs the DemoServer handshake, answers VER, and exposes generic radio frontend capabilities. BladeRF and HackRF support is optional and enabled when their development libraries are available at build time.
 
 ## Network flow
 
@@ -11,13 +11,75 @@ Portable C99 UDP client that initiates the DemoServer handshake and answers its 
 5. Retry the handshake and accept only a 52-byte reply from the configured server endpoint.
 6. Wait for a server-initiated 5-byte VER request `[request_id:u32 LE][0x01]`.
 7. Reply with 14 bytes `[request_id:u32 LE][version:10 ASCII bytes, zero padded]`.
-8. Exit after VER; later network commands are not implemented yet.
+8. Answer `GET_RADIO_FRONTENDS` and `SET_ACTIVE_RADIO` using a vendor-neutral capability record.
+9. Keep listening for subsequent radio commands until stopped; use `--command-timeout` for a finite test window.
 
 Normally the session reply must be exactly 52 bytes. A temporary diagnostic build supports `--ignore-session-reply-size`: it accepts any datagram size from the configured server endpoint as the session-stage response, logs a warning, and proceeds to wait for VER. This does not decode or validate that packet and must not be treated as a successful handshake; the strict 52-byte check remains enabled by default.
 
 The packet layouts follow `tools/Orkestr.DemoServer`'s `WireLayout` and `VerLayout`. The version default `1.0.0.0` follows the .NET SDK default assembly version for this project, which does not specify `Version` or `AssemblyVersion`; it has not been checked against a freshly built server here because only the .NET 8 SDK is installed while the project targets .NET 10. If the server assembly version changes, pass the matching value with `--software-version`; the server compares all ten version bytes exactly.
 
-The session reply is length-checked and its sender endpoint is checked, but the key, nonce, and timestamp are not used because the current server does not require them for VER. This node does not authenticate the server cryptographically or implement encryption or commands after VER.
+The session reply is length-checked and its sender endpoint is checked, but the key, nonce, and timestamp are not used because the current server does not require them for VER. This node does not authenticate the server cryptographically or implement encryption.
+
+## Radio Frontend Commands
+
+These experimental commands use little-endian `RequestId`; the C# DemoServer does not yet dispatch them. The Python mock supports them with `--radio-commands`. Commands are accepted only from the configured server endpoint. Unknown or malformed command datagrams are ignored.
+
+### Command Frames
+
+| Opcode | Name | Server-to-client request | Client-to-server response |
+| --- | --- | --- | --- |
+| `0x04` | `GET_RADIO_FRONTENDS` | 5 bytes: `request_id:u32 LE, opcode:u8` | `8 + count * 128` bytes: `request_id:u32 LE, opcode:u8, status:u8, count:u8, active_id:u8, descriptors[]` |
+| `0x05` | `SET_ACTIVE_RADIO` | 6 bytes: `request_id:u32 LE, opcode:u8, frontend_id:u8` | 7 bytes: `request_id:u32 LE, opcode:u8, status:u8, active_id:u8` |
+
+For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected, `2` means the ID is not present, and `1` is reserved for an invalid request. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; it does not start a stream, tune hardware, or transmit RF. `--command-timeout 0` (default) waits indefinitely after VER; a positive value bounds that wait in milliseconds.
+
+### Capability Descriptor
+
+Each descriptor is exactly 128 bytes. Integers are unsigned unless explicitly marked signed; all multibyte fields are little-endian. Offsets below are relative to the start of one descriptor.
+
+| Offset | Size | Field | Meaning and allowed values |
+| ---: | ---: | --- | --- |
+| 0 | 1 | `frontend_id` | Process-local ID; choose only an ID returned by this query. |
+| 1 | 1 | `rx_channels` | Number of RX channels (`0..255`; current devices: 1 or 2). |
+| 2 | 1 | `tx_channels` | Number of TX channels (`0..255`; current devices: 1 or 2). |
+| 3 | 1 | `flags` | Bit 0 `FULL_DUPLEX`; other bits are reserved and zero. |
+| 4 | 4 | `capabilities` | Bit 0 RX, bit 1 TX, bit 2 tune, bit 3 sample rate, bit 4 bandwidth, bit 5 gain. Unknown bits are reserved. |
+| 8 | 8 | `frequency_min_hz` | Inclusive lower tuning limit. The scanner intentionally advertises a common floor of `70,000,000 Hz` for both backends. |
+| 16 | 8 | `frequency_max_hz` | Inclusive upper tuning limit; currently `6,000,000,000 Hz` for both backends. |
+| 24 | 4 | `frequency_step_hz` | Tuning input granularity in Hz; `0` means no uniform step is advertised. The actual tuned frequency may be quantized by the device. |
+| 28 | 4 | `sample_rate_min_hz` | Inclusive minimum RX sample rate. |
+| 32 | 4 | `sample_rate_max_hz` | Inclusive maximum RX sample rate. |
+| 36 | 4 | `sample_rate_step_hz` | Uniform sample-rate step in Hz; `0` means no single step is advertised. |
+| 40 | 4 | `bandwidth_min_hz` | Inclusive minimum RX filter bandwidth. |
+| 44 | 4 | `bandwidth_max_hz` | Inclusive maximum RX filter bandwidth. |
+| 48 | 4 | `bandwidth_step_hz` | Uniform bandwidth step in Hz; `0` means use the explicit options below, or that no uniform step is available. |
+| 52 | 2 | `gain_min_cdb` | Signed minimum nominal RX gain in centi-dB (`-1500` means `-15.00 dB`). |
+| 54 | 2 | `gain_max_cdb` | Signed maximum nominal RX gain in centi-dB. |
+| 56 | 2 | `gain_step_cdb` | Uniform gain step in centi-dB; `0` means backend-mapped/nonuniform controls. |
+| 58 | 1 | `sample_resolution_bits` | ADC resolution: currently `12` for bladeRF 2.0 micro, `8` for HackRF One. |
+| 59 | 1 | `iq_sample_format` | `1` = signed interleaved 8-bit I/Q; `2` = signed interleaved 16-bit I/Q container. Resolution above remains the effective ADC precision. |
+| 60 | 1 | `agc_modes` | Bit 0 hardware AGC; bit 1 software AGC. Current discovery advertises hardware AGC for BladeRF when supported; HackRF reports `0`. |
+| 61 | 1 | `bandwidth_option_count` | Number of valid entries in `bandwidth_options` (`0..16`). |
+| 62 | 1 | `antenna_paths` | Number of RX antenna paths currently exposed by the backend. |
+| 63 | 1 | `reserved` | Must be zero; ignore on receive. |
+| 64 | 64 | `bandwidth_options[16]` | Up to 16 exact RX bandwidths in Hz. The first `bandwidth_option_count` values are valid; remaining slots are zero. |
+
+The HackRF bandwidth list is `1,750,000; 2,500,000; 3,500,000; 5,000,000; 5,500,000; 6,000,000; 7,000,000; 8,000,000; 9,000,000; 10,000,000; 12,000,000; 14,000,000; 15,000,000; 20,000,000; 24,000,000; 28,000,000 Hz`. BladeRF currently reports its API min/max/step and no explicit list. A zero step is not permission to choose outside the advertised range; the backend must validate and report the actual applied setting when a future configuration command is added.
+
+Gain is one backend-neutral nominal RX scale in centi-dB. BladeRF limits come from libbladeRF's overall RX gain range. HackRF's advertised `0..11,300 centi-dB` is nominal combined RX gain (RF amp plus LNA/VGA); the backend must map a requested value to its hardware stages. HackRF RF amp gain varies by frequency, and its discrete stages mean `gain_step_cdb=0`. BladeRF gain limits can also vary with tuning frequency, so the final setter must re-check the range after tuning. `agc_modes` is a capability mask, not current AGC state.
+
+### Current Backend Profiles
+
+The descriptor reports runtime capabilities, not a hard-coded model ID. Expected profiles for the two current adapters are:
+
+| Adapter | RX/TX and duplex | RX sample rate | RX bandwidth | Gain / AGC | IQ |
+| --- | --- | --- | --- | --- | --- |
+| bladeRF 2.0 micro | 2 RX, 2 TX, full duplex | libbladeRF range (about `521 kHz..61.44 MHz`) | libbladeRF range (about `200 kHz..56 MHz`); values may be quantized by the device | RX overall-gain range from libbladeRF (typically around `-15..+60 dB`, frequency-dependent); hardware AGC advertised when the API reports it | 12-bit converter, signed 16-bit I/Q container |
+| HackRF One | 1 RX, 1 TX, half duplex | `2..20 MS/s` | exact 16-value list above | nominal RX total gain `0..113 dB`; nonuniform hardware stages; no hardware AGC | 8-bit signed I/Q |
+
+The scanner deliberately reports `70 MHz` as the minimum for both radios even though HackRF One can tune lower and bladeRF TX can tune below its RX floor. This gives the server one common tuning domain. Sample-rate/bandwidth values are RX capabilities; TX tuning uses the same advertised common frequency domain. Zero step means the backend does not expose a uniform step; it does not mean all out-of-range values are accepted. Configuration commands must validate backend-specific values and return the actual applied setting.
+
+`sample_resolution_bits` describes converter precision; `iq_sample_format` describes the signed I/Q component container. These are distinct: BladeRF carries 12-bit converter samples in a 16-bit component, while HackRF provides 8-bit components. Vendor/model/serial are deliberately absent from the wire response; IDs are discovery-order IDs and must be queried again after restart or reconnect.
 
 ## JSON files
 
@@ -41,14 +103,14 @@ Input/output uses the same schema as the original `device.c`:
 
 ## HackRF Hardware Setup
 
-### Default Hardware-Free Build
+### Optional SDR Discovery Build
 
-The default `scanner_node` target is network-only: `CMakeLists.txt` does not include or link libhackrf, and the executable does not open the SDR. It can be built and used for JSON, handshake, and VER debugging even on a system without HackRF packages or hardware. Installing libhackrf on the Pi does not change this binary. RF configuration, capture, measurement, and corresponding network command handlers are not implemented in `scanner_node` yet.
+The generic frontend inventory works without SDR libraries and reports zero devices. CMake automatically enables BladeRF and/or HackRF discovery when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Frequency/rate/gain configuration, streaming, capture, measurements, and RF command handlers are not implemented yet.
 
-Verify that the deployed/default executable remains independent of libhackrf with:
+Inspect which optional SDR libraries were linked into this build with:
 
 ```bash
-ldd ./scanner_node | grep -i hackrf || echo "No libhackrf dependency (network-only build)"
+ldd ./scanner_node | grep -Ei 'bladeRF|hackrf' || echo "No optional SDR backend linked"
 ./scanner_node --help
 ```
 
@@ -96,11 +158,11 @@ Expected: `hackrf_info` reports the board and firmware; `hackrf_sweep` prints me
 
 ### Future Hardware Integration
 
-When RF commands are added, keep libhackrf optional: a hardware-enabled CMake build should explicitly discover/link libhackrf, while the default network-only build remains independent. Hardware initialization errors should not prevent the network-only handshake/VER debugging path. Test the hardware backend separately with device detection, frequency/sample-rate/gain configuration, bounded RX capture, and a known RF source before wiring command opcodes to it.
+The HackRF adapter currently discovers boards and advertises their generic capabilities. Keep libhackrf optional. Before adding tune/capture commands, test frequency/sample-rate/gain configuration and bounded RX capture with a known RF source; do not enable TX as part of these discovery tests.
 
 ## BladeRF Hardware Preparation
 
-BladeRF is a separate SDR backend from HackRF. The default `scanner_node` executable does not link libbladeRF and does not require a BladeRF to be connected; this keeps handshake/VER server debugging available regardless of radio hardware. Installing the BladeRF packages below prepares the Pi OS but does not add radio commands to this executable.
+BladeRF is discovered through the same generic frontend abstraction as HackRF. Vendor identity appears only in local diagnostic output; the server receives channel counts and generic capabilities, not a model-specific command set.
 
 ### Packages And Prepared Images
 
@@ -125,7 +187,7 @@ This provides `bladeRF-cli` 1.8.0, libbladeRF 2.4.1 and development headers. The
 | `hostedxA5.rbf` | bladeRF2 xA5 |
 | `hostedxA9.rbf` | bladeRF2 xA9 |
 
-All variants are staged because the board is currently disconnected and its exact model/FPGA is unknown. Do not flash an FPGA image based only on the USB VID/PID; identify the board first. Package installation downloads files but does not write firmware/FPGA images to the radio.
+The images were staged before the board model was known. The attached Pi board was later identified as a bladeRF 2.0 micro with a 49 KLE FPGA. Do not flash an FPGA image merely because it is available; the board reported a loaded FPGA during the latest read-only probe, so no firmware/FPGA write is needed for discovery.
 
 ### USB Permissions
 
@@ -150,13 +212,13 @@ bladeRF-cli --version
 bladeRF-cli -p
 ```
 
-Expected with a connected, accessible board: `bladeRF-cli -p` lists it. Currently the Pi reports `No devices are available`, which is expected because the BladeRF is unplugged. The package CLI and libraries are present; device-specific initialization cannot be validated until it is connected.
+Verified on `rpi4` at `10.123.71.141`: both a Nuand bladeRF 2.0 micro (`2cf0:5250`) and HackRF One (`1d50:6089`) are attached and accessible to `rpi`. BladeRF reports a loaded FPGA, firmware `2.4.0-git-a3d5c55f`, FPGA `0.14.0`, and SuperSpeed USB. `hackrf_info` identifies Board ID 2 (HackRF One), firmware `local-79baef7`, USB API 1.03. On 2026-10-01 the ARM scanner discovered two frontends; the Python mock queried both and selected HackRF logical ID `1` successfully. The test only enumerates/selects devices; it does not start RX/TX streaming.
 
 ### Firmware And FPGA Loading (Only After Model Identification)
 
 `bladeRF-cli --help` documents `-f/--flash-firmware <file>`, `-l/--load-fpga <file>` (volatile load) and `-L/--flash-fpga <file>` (persistent FPGA flash). Use the matching image from `/usr/share/Nuand/bladeRF/` only when the CLI reports that an update/load is required and the exact board variant is known. FPGA flashing is persistent; a wrong image may prevent normal operation. Do not run firmware/FPGA writes as part of routine scanner tests.
 
-The CMake project currently has no optional BladeRF backend or libbladeRF link target. The BladeRF CLI can validate hardware independently, but actual frequency control, RX capture, streaming, and protocol commands still need to be implemented and tested in a dedicated backend.
+The optional libbladeRF backend currently detects the device and queries its ranges. Actual frequency control, RX capture, streaming, and measurement commands still need implementation. `scanner_node/tools/radio_e2e_test.py` runs the real executable against the Python mock and exercises capability query plus logical frontend selection without transmitting RF.
 
 ## Build
 
@@ -368,7 +430,7 @@ python -m unittest discover -s tests -p test_demo_server_mock.py -v
 
 ## Run
 
-With defaults, run the node directly; the server is `82.165.20.164` and the device JSON is `../scanner-node-build/device.json` relative to the current working directory:
+With defaults, run the node directly; the server is `82.165.20.164` and the device JSON is `../scanner-node-build/device.json` relative to the current working directory. After VER it stays in the command loop until stopped:
 
 ```powershell
 ./scanner_node
@@ -380,8 +442,8 @@ Override either default with `--server` or `--device-json`. For example, to use 
 ./scanner_node --server 127.0.0.1 --device-json ../../device.json --save-device-json ./device-copy.json
 ```
 
-Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--software-version`, `--attempts`, `--handshake-timeout`, and `--ver-timeout`. Use `--help` for current defaults.
+Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--software-version`, `--attempts`, `--handshake-timeout`, `--ver-timeout`, and `--command-timeout`. Use `--command-timeout 1000` for a one-second test window.
 
 ## Tests
 
-`scanner_protocol_tests` checks handshake layout, VER fields, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. The Python mock tests the same flow and can also be used with the actual C executable or Pi. It remains a test fixture and does not replace validation against the production DemoServer and RF hardware.
+`scanner_protocol_tests` checks handshake layout, VER fields, radio command encoding, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json` from the deployed project directory to exercise the real binary against the Python mock and attached radio. It verifies discovery and selection only, not RF capture or measurement. The C# DemoServer does not yet dispatch the two experimental radio commands.

@@ -70,6 +70,102 @@ int scanner_decode_ver_request(const uint8_t *bytes, size_t size, ScannerVerRequ
     return 1;
 }
 
+int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE
+        || bytes[4] != SCANNER_GET_RADIO_FRONTENDS_COMMAND)
+        return 0;
+
+    request->request_id = read_u32_le(bytes);
+    return 1;
+}
+
+int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE + 1u
+        || bytes[4] != SCANNER_SET_ACTIVE_RADIO_COMMAND)
+        return 0;
+
+    request->request_id = read_u32_le(bytes);
+    request->frontend_id = bytes[5];
+    return 1;
+}
+
+static int encode_radio_frontend(uint8_t *output, const ScannerRadioFrontend *frontend)
+{
+    size_t index;
+    if (frontend->bandwidth_option_count > SCANNER_RADIO_MAX_BANDWIDTH_OPTIONS)
+        return 0;
+
+    memset(output, 0, SCANNER_RADIO_CAPABILITY_WIRE_SIZE);
+    write_le(output, frontend->id, 1);
+    write_le(output + 1, frontend->rx_channels, 1);
+    write_le(output + 2, frontend->tx_channels, 1);
+    write_le(output + 3, frontend->flags, 1);
+    write_le(output + 4, frontend->capabilities, 4);
+    write_le(output + 8, frontend->frequency_min_hz, 8);
+    write_le(output + 16, frontend->frequency_max_hz, 8);
+    write_le(output + 24, frontend->frequency_step_hz, 4);
+    write_le(output + 28, frontend->sample_rate_min_hz, 4);
+    write_le(output + 32, frontend->sample_rate_max_hz, 4);
+    write_le(output + 36, frontend->sample_rate_step_hz, 4);
+    write_le(output + 40, frontend->bandwidth_min_hz, 4);
+    write_le(output + 44, frontend->bandwidth_max_hz, 4);
+    write_le(output + 48, frontend->bandwidth_step_hz, 4);
+    write_le(output + 52, (uint16_t)frontend->gain_min_cdb, 2);
+    write_le(output + 54, (uint16_t)frontend->gain_max_cdb, 2);
+    write_le(output + 56, (uint16_t)frontend->gain_step_cdb, 2);
+    write_le(output + 58, frontend->sample_resolution_bits, 1);
+    write_le(output + 59, frontend->iq_sample_format, 1);
+    write_le(output + 60, frontend->agc_modes, 1);
+    write_le(output + 61, frontend->bandwidth_option_count, 1);
+    write_le(output + 62, frontend->antenna_paths, 1);
+    write_le(output + 63, frontend->reserved, 1);
+    for (index = 0; index < frontend->bandwidth_option_count; ++index)
+        write_le(output + 64 + index * 4, frontend->bandwidth_options[index], 4);
+    return 1;
+}
+
+size_t scanner_encode_radio_frontends_response(uint8_t *output, size_t output_capacity, uint32_t request_id,
+                                               const ScannerRadioInventory *inventory)
+{
+    size_t index;
+    size_t response_size;
+    size_t offset;
+
+    if (output == NULL || inventory == NULL || inventory->count > SCANNER_RADIO_MAX_FRONTENDS)
+        return 0;
+    response_size = 8u + inventory->count * SCANNER_RADIO_CAPABILITY_WIRE_SIZE;
+    if (output_capacity < response_size)
+        return 0;
+
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_GET_RADIO_FRONTENDS_COMMAND;
+    output[5] = SCANNER_RADIO_STATUS_OK;
+    output[6] = (uint8_t)inventory->count;
+    output[7] = inventory->active_id;
+    offset = 8;
+    for (index = 0; index < inventory->count; ++index)
+    {
+        if (!encode_radio_frontend(output + offset, &inventory->frontends[index]))
+            return 0;
+        offset += SCANNER_RADIO_CAPABILITY_WIRE_SIZE;
+    }
+    return response_size;
+}
+
+size_t scanner_encode_set_active_radio_response(uint8_t output[7], uint32_t request_id, uint8_t status,
+                                                uint8_t active_id)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_SET_ACTIVE_RADIO_COMMAND;
+    output[5] = status;
+    output[6] = active_id;
+    return 7;
+}
+
 int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)
 {
     size_t length;

@@ -24,7 +24,15 @@ int main(int argc, char **argv)
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
     const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
+    const uint8_t frontends_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
+    const uint8_t select_request_bytes[SCANNER_VER_REQUEST_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
+    uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
+    uint8_t select_response[7];
     ScannerVerRequest request;
+    ScannerRadioFrontendsRequest frontends_request;
+    ScannerSetActiveRadioRequest select_request;
+    ScannerRadioInventory inventory;
+    size_t frontends_response_size;
     char error[256];
     size_t index;
     int ok = 1;
@@ -67,6 +75,74 @@ int main(int argc, char **argv)
         ok &= require_true(response[index] == 0, "VER version is not zero-padded");
     }
     ok &= require_true(!scanner_encode_ver_response(response, 1, "12345678901"), "Overlong VER version was accepted");
+
+    memset(&inventory, 0, sizeof(inventory));
+    inventory.active_id = SCANNER_RADIO_ID_NONE;
+    inventory.count = 1;
+    inventory.frontends[0].id = 0;
+    inventory.frontends[0].rx_channels = 2;
+    inventory.frontends[0].tx_channels = 2;
+    inventory.frontends[0].capabilities = SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TX | SCANNER_RADIO_CAP_TUNE;
+    inventory.frontends[0].frequency_min_hz = UINT64_C(70000000);
+    inventory.frontends[0].frequency_max_hz = UINT64_C(6000000000);
+    inventory.frontends[0].frequency_step_hz = 1;
+    inventory.frontends[0].sample_rate_min_hz = UINT32_C(2000000);
+    inventory.frontends[0].sample_rate_max_hz = UINT32_C(20000000);
+    inventory.frontends[0].bandwidth_option_count = 2;
+    inventory.frontends[0].bandwidth_options[0] = UINT32_C(1750000);
+    inventory.frontends[0].bandwidth_options[1] = UINT32_C(2500000);
+    inventory.frontends[0].gain_min_cdb = -250;
+    inventory.frontends[0].gain_max_cdb = 6000;
+    inventory.frontends[0].sample_resolution_bits = 12;
+    inventory.frontends[0].iq_sample_format = SCANNER_RADIO_IQ_FORMAT_S16;
+    inventory.frontends[0].agc_modes = SCANNER_RADIO_AGC_HARDWARE;
+    ok &= require_true(scanner_decode_radio_frontends_request(frontends_request_bytes, sizeof(frontends_request_bytes),
+                                                              &frontends_request),
+                       "Valid radio frontend query was rejected");
+    ok &= require_true(frontends_request.request_id == UINT32_C(0x12345678),
+                       "Radio frontend query RequestId decode failed");
+    ok &= require_true(!scanner_decode_radio_frontends_request(request_bytes, sizeof(request_bytes),
+                                                               &frontends_request),
+                       "VER request was accepted as a frontend query");
+    ok &= require_true(scanner_decode_set_active_radio_request(select_request_bytes, sizeof(select_request_bytes),
+                                                               &select_request),
+                       "Valid active radio selection was rejected");
+    ok &= require_true(select_request.request_id == 9 && select_request.frontend_id == 0,
+                       "Active radio selection fields were decoded incorrectly");
+    ok &= require_true(!scanner_decode_set_active_radio_request(select_request_bytes, sizeof(select_request_bytes) - 1,
+                                                                &select_request),
+                       "Short active radio selection was accepted");
+    frontends_response_size = scanner_encode_radio_frontends_response(frontends_response, sizeof(frontends_response),
+                                                                      UINT32_C(0x12345678), &inventory);
+    ok &= require_true(frontends_response_size == 8 + SCANNER_RADIO_CAPABILITY_WIRE_SIZE,
+                       "Radio capability response has the wrong size");
+    ok &= require_true(frontends_response[0] == 0x78 && frontends_response[3] == 0x12
+                           && frontends_response[4] == SCANNER_GET_RADIO_FRONTENDS_COMMAND
+                           && frontends_response[5] == SCANNER_RADIO_STATUS_OK && frontends_response[6] == 1
+                           && frontends_response[7] == SCANNER_RADIO_ID_NONE,
+                       "Radio capability response header is incorrect");
+    ok &= require_true(frontends_response[16] == 0x80 && frontends_response[17] == 0x1d
+                           && frontends_response[24] == 0x00 && frontends_response[25] == 0xbc,
+                       "Radio frontend frequency limits are not encoded little-endian");
+    ok &= require_true(frontends_response[32] == 1 && frontends_response[33] == 0,
+                       "Radio frontend frequency step is incorrect");
+    ok &= require_true(frontends_response[60] == 0x06 && frontends_response[61] == 0xff,
+                       "Signed centi-dB gain is not encoded little-endian");
+    ok &= require_true(frontends_response[66] == 12 && frontends_response[67] == SCANNER_RADIO_IQ_FORMAT_S16
+                           && frontends_response[68] == SCANNER_RADIO_AGC_HARDWARE && frontends_response[69] == 2,
+                       "IQ resolution, format, AGC, or bandwidth option count is incorrect");
+    ok &= require_true(frontends_response[72] == 0xf0 && frontends_response[73] == 0xb3
+                           && frontends_response[76] == 0xa0 && frontends_response[77] == 0x25,
+                       "Discrete bandwidth options are not encoded little-endian");
+    ok &= require_true(scanner_encode_set_active_radio_response(select_response, 9, SCANNER_RADIO_STATUS_OK, 0)
+                               == sizeof(select_response)
+                           && select_response[4] == SCANNER_SET_ACTIVE_RADIO_COMMAND
+                           && select_response[5] == SCANNER_RADIO_STATUS_OK && select_response[6] == 0,
+                       "Active radio response encoding failed");
+    ok &= require_true(scanner_radio_select(&inventory, 0) && scanner_radio_active(&inventory) != NULL,
+                       "Available frontend could not be selected");
+    ok &= require_true(!scanner_radio_select(&inventory, 1) && scanner_radio_active(&inventory) != NULL,
+                       "Unavailable frontend selection was accepted");
 
     remove(argv[2]);
     return ok ? 0 : 1;

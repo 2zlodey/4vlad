@@ -10,10 +10,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from tools.demo_server_mock import (  # noqa: E402
     HANDSHAKE_SIZE,
     MockProtocolError,
+    build_radio_frontends_request,
+    build_radio_frontends_response,
+    build_set_active_radio_request,
+    build_set_active_radio_response,
     build_ver_request,
     build_ver_response,
     parse_handshake,
     serve_one,
+    parse_radio_frontends_response,
     validate_ver_response,
 )
 
@@ -87,6 +92,63 @@ class DemoServerMockTests(unittest.TestCase):
         self.assertFalse(worker.is_alive(), "mock server thread did not stop")
         self.assertEqual(server_error, [])
         self.assertEqual(server_result[0][0]["device_id"], 12345)
+
+    def test_udp_exchange_queries_and_selects_generic_radio_frontend(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        server.bind(("127.0.0.1", 0))
+        client.bind(("127.0.0.1", 0))
+        server.settimeout(2)
+        client.settimeout(2)
+        server_result = []
+        server_error = []
+
+        def run_server():
+            try:
+                server_result.append(serve_one(server, "1.0.0.0", 2, 7, True, 0))
+            except Exception as error:  # Propagate worker failure to the test thread.
+                server_error.append(error)
+
+        worker = threading.Thread(target=run_server)
+        worker.start()
+        try:
+            client_port = client.getsockname()[1]
+            packet = bytearray(HANDSHAKE_SIZE)
+            struct.pack_into("<IqqH", packet, 0, 1, 10, 20, client_port)
+            struct.pack_into("<i", packet, 22, 12345)
+            client.sendto(packet, server.getsockname())
+
+            session, _ = client.recvfrom(1024)
+            request, _ = client.recvfrom(1024)
+            self.assertEqual(len(session), 52)
+            self.assertEqual(request, build_ver_request(7))
+            client.sendto(build_ver_response(7, "1.0.0.0"), server.getsockname())
+
+            query, _ = client.recvfrom(1024)
+            self.assertEqual(query, build_radio_frontends_request(8))
+            response = build_radio_frontends_response(8)
+            client.sendto(response, server.getsockname())
+            inventory = parse_radio_frontends_response(response, 8)
+            self.assertEqual(inventory["frontends"][0]["rx_channels"], 2)
+            self.assertEqual(inventory["frontends"][0]["tx_channels"], 2)
+            self.assertEqual(inventory["frontends"][0]["frequency_min_hz"], 70000000)
+            self.assertEqual(inventory["frontends"][0]["frequency_max_hz"], 6000000000)
+            self.assertEqual(inventory["frontends"][0]["sample_resolution_bits"], 12)
+            self.assertEqual(inventory["frontends"][0]["iq_sample_format"], 2)
+            self.assertEqual(inventory["frontends"][0]["agc_modes"], 1)
+            self.assertEqual(inventory["frontends"][0]["bandwidth_options"], [1750000, 2500000])
+
+            selection, _ = client.recvfrom(1024)
+            self.assertEqual(selection, build_set_active_radio_request(9, 0))
+            client.sendto(build_set_active_radio_response(9, 0), server.getsockname())
+        finally:
+            worker.join(timeout=3)
+            client.close()
+            server.close()
+
+        self.assertFalse(worker.is_alive(), "mock server thread did not stop")
+        self.assertEqual(server_error, [])
+        self.assertEqual(server_result[0][2]["frontends"][0]["id"], 0)
 
 
 if __name__ == "__main__":
