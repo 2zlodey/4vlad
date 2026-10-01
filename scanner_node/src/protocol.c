@@ -100,6 +100,27 @@ int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRe
     return 1;
 }
 
+int scanner_decode_set_frequency_request(const uint8_t *bytes, size_t size, ScannerSetFrequencyRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 10u || bytes[4] != SCANNER_SET_FREQUENCY_COMMAND)
+        return 0;
+
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->frequency_khz = read_u32_le(bytes + 6);
+    return 1;
+}
+
+int scanner_decode_get_frequency_request(const uint8_t *bytes, size_t size, ScannerGetFrequencyRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 6u || bytes[4] != SCANNER_GET_FREQUENCY_COMMAND)
+        return 0;
+
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    return 1;
+}
+
 static int encode_radio_frontend(uint8_t *output, const ScannerRadioFrontend *frontend)
 {
     size_t index;
@@ -183,6 +204,19 @@ size_t scanner_encode_exit_response(uint8_t output[6], uint32_t request_id, uint
     output[4] = SCANNER_EXIT_COMMAND;
     output[5] = status;
     return 6;
+}
+
+size_t scanner_encode_frequency_response(uint8_t output[15], uint32_t request_id, uint8_t command, uint8_t status,
+                                         uint8_t channel, uint64_t frequency_hz)
+{
+    if (output == NULL || (command != SCANNER_SET_FREQUENCY_COMMAND && command != SCANNER_GET_FREQUENCY_COMMAND))
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = command;
+    output[5] = status;
+    output[6] = channel;
+    write_le(output + 7, frequency_hz, 8);
+    return 15;
 }
 
 int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)

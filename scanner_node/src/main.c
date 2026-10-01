@@ -266,6 +266,9 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
     ScannerExitRequest exit_request;
+    ScannerSetFrequencyRequest set_frequency_request;
+    ScannerGetFrequencyRequest get_frequency_request;
+    const ScannerRadioFrontend *active_frontend;
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {
@@ -296,6 +299,67 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
             return 0;
         printf("Active radio selection %" PRIu32 ": frontend=%u status=%u\n", select_request.request_id,
                (unsigned int)select_request.frontend_id, (unsigned int)status);
+        return 1;
+    }
+
+    if (scanner_decode_set_frequency_request(datagram->payload, datagram->size, &set_frequency_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint64_t actual_frequency_hz = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (set_frequency_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if ((uint64_t)set_frequency_request.frequency_khz * 1000u < active_frontend->frequency_min_hz
+                 || (uint64_t)set_frequency_request.frequency_khz * 1000u > active_frontend->frequency_max_hz)
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        else if (!scanner_radio_set_frequency(inventory, set_frequency_request.channel,
+                                              (uint64_t)set_frequency_request.frequency_khz * 1000u,
+                                              &actual_frequency_hz))
+            status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+
+        response_size = scanner_encode_frequency_response(response, set_frequency_request.request_id,
+                                                          SCANNER_SET_FREQUENCY_COMMAND, status,
+                                                          set_frequency_request.channel, actual_frequency_hz);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        printf("Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%" PRIu64 " Hz\n",
+               set_frequency_request.request_id, (unsigned int)set_frequency_request.channel,
+               (unsigned int)set_frequency_request.frequency_khz, (unsigned int)status, actual_frequency_hz);
+        return 1;
+    }
+
+    if (scanner_decode_get_frequency_request(datagram->payload, datagram->size, &get_frequency_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint64_t frequency_hz = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (get_frequency_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else
+        {
+            int get_result = scanner_radio_get_frequency(inventory, get_frequency_request.channel, &frequency_hz);
+            if (get_result == 0)
+                status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+            else if (get_result < 0)
+                status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
+        }
+
+        response_size = scanner_encode_frequency_response(response, get_frequency_request.request_id,
+                                                          SCANNER_GET_FREQUENCY_COMMAND, status,
+                                                          get_frequency_request.channel, frequency_hz);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        printf("Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz\n",
+               get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
+               frequency_hz);
         return 1;
     }
 
@@ -496,6 +560,7 @@ static int run_node(const Options *options)
     }
 
 cleanup:
+    scanner_radio_close_all(&radio_inventory);
     scanner_udp_close(&socket_handle);
     return result == 1;
 }

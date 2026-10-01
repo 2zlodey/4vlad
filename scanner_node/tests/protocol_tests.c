@@ -26,14 +26,20 @@ int main(int argc, char **argv)
     const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
     const uint8_t frontends_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
     const uint8_t exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
+    const uint8_t set_frequency_request_bytes[10] = { 0xdd, 0xcc, 0xbb, 0xaa, SCANNER_SET_FREQUENCY_COMMAND,
+                                                      1,    0xa0, 0x86, 0x01, 0x00 };
+    const uint8_t get_frequency_request_bytes[6] = { 0x0d, 0x00, 0x00, 0x00, SCANNER_GET_FREQUENCY_COMMAND, 1 };
     const uint8_t select_request_bytes[SCANNER_VER_REQUEST_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
     uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
     uint8_t select_response[7];
     uint8_t exit_response[6];
+    uint8_t frequency_response[15];
     ScannerVerRequest request;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
     ScannerExitRequest exit_request;
+    ScannerSetFrequencyRequest set_frequency_request;
+    ScannerGetFrequencyRequest get_frequency_request;
     ScannerRadioInventory inventory;
     size_t frontends_response_size;
     char error[256];
@@ -121,6 +127,19 @@ int main(int argc, char **argv)
     ok &= require_true(!scanner_decode_exit_request(frontends_request_bytes, sizeof(frontends_request_bytes),
                                                     &exit_request),
                        "Frontend query was accepted as an Exit request");
+    ok &= require_true(scanner_decode_set_frequency_request(set_frequency_request_bytes,
+                                                            sizeof(set_frequency_request_bytes), &set_frequency_request)
+                           && set_frequency_request.request_id == UINT32_C(0xaabbccdd)
+                           && set_frequency_request.channel == 1 && set_frequency_request.frequency_khz == 100000,
+                       "SET_FREQUENCY request decode failed");
+    ok &= require_true(!scanner_decode_set_frequency_request(set_frequency_request_bytes,
+                                                             sizeof(set_frequency_request_bytes) - 1,
+                                                             &set_frequency_request),
+                       "Short SET_FREQUENCY request was accepted");
+    ok &= require_true(scanner_decode_get_frequency_request(get_frequency_request_bytes,
+                                                            sizeof(get_frequency_request_bytes), &get_frequency_request)
+                           && get_frequency_request.request_id == 13 && get_frequency_request.channel == 1,
+                       "GET_FREQUENCY request decode failed");
     frontends_response_size = scanner_encode_radio_frontends_response(frontends_response, sizeof(frontends_response),
                                                                       UINT32_C(0x12345678), &inventory);
     ok &= require_true(frontends_response_size == 8 + SCANNER_RADIO_CAPABILITY_WIRE_SIZE,
@@ -152,10 +171,22 @@ int main(int argc, char **argv)
                            && exit_response[0] == 11 && exit_response[4] == SCANNER_EXIT_COMMAND
                            && exit_response[5] == SCANNER_RADIO_STATUS_OK,
                        "Exit acknowledgment encoding failed");
+    ok &= require_true(scanner_encode_frequency_response(frequency_response, 14, SCANNER_GET_FREQUENCY_COMMAND,
+                                                         SCANNER_RADIO_STATUS_OK, 1, UINT64_C(100000000))
+                               == sizeof(frequency_response)
+                           && frequency_response[0] == 14 && frequency_response[4] == SCANNER_GET_FREQUENCY_COMMAND
+                           && frequency_response[5] == SCANNER_RADIO_STATUS_OK && frequency_response[6] == 1
+                           && frequency_response[7] == 0x00 && frequency_response[8] == 0xe1
+                           && frequency_response[9] == 0xf5 && frequency_response[10] == 0x05
+                           && frequency_response[11] == 0x00,
+                       "Frequency response does not contain exact little-endian Hz");
     ok &= require_true(scanner_radio_select(&inventory, 0) && scanner_radio_active(&inventory) != NULL,
                        "Available frontend could not be selected");
     ok &= require_true(!scanner_radio_select(&inventory, 1) && scanner_radio_active(&inventory) != NULL,
                        "Unavailable frontend selection was accepted");
+    ok &= require_true(scanner_radio_select(&inventory, SCANNER_RADIO_ID_NONE)
+                           && scanner_radio_active(&inventory) == NULL,
+                       "Neutral frontend selection did not clear the active radio");
 
     remove(argv[2]);
     return ok ? 0 : 1;

@@ -87,8 +87,13 @@ def main():
     expected_format = 1 if selected["sample_resolution_bits"] == 8 else 2
     if selected["iq_sample_format"] != expected_format:
         raise SystemExit("frontend IQ format does not match its sample resolution")
+    expected_frequencies = {str(item["id"]): 100000000 for item in inventory["frontends"]}
+    if inventory.get("frequencies_hz") != expected_frequencies:
+        raise SystemExit("set/get frequency round-trip failed for one or more frontends")
+    if not inventory.get("neutral_closed"):
+        raise SystemExit("neutral frontend selection did not close all radio handles")
     print(
-        "E2E PASS: {} frontend(s); selected id={} RX={} TX={} frequency={}..{} Hz IQ={}bit/fmt{} AGC=0x{:02x}".format(
+        "E2E PASS: {} frontend(s); selection order starts id={} RX={} TX={} range={}..{} Hz frequency set/get=OK, neutral close=OK IQ={}bit/fmt{} AGC=0x{:02x}".format(
             len(inventory["frontends"]),
             args.frontend_id,
             selected["rx_channels"],

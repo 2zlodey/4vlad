@@ -30,11 +30,19 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | --- | --- | --- | --- |
 | `0x04` | `GET_RADIO_FRONTENDS` | 5 bytes: `request_id:u32 LE, opcode:u8` | `8 + count * 128` bytes: `request_id:u32 LE, opcode:u8, status:u8, count:u8, active_id:u8, descriptors[]` |
 | `0x05` | `SET_ACTIVE_RADIO` | 6 bytes: `request_id:u32 LE, opcode:u8, frontend_id:u8` | 7 bytes: `request_id:u32 LE, opcode:u8, status:u8, active_id:u8` |
+| `0x64` | `SET_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | 15 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, applied_frequency_hz:u64 LE` |
+| `0x6a` | `GET_FREQUENCY` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 15 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, frequency_hz:u64 LE` |
 | `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
 For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Status `1` is reserved for invalid requests. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; it does not start a stream, tune hardware, or transmit RF.
 
-After a valid VER response, the client remains in its UDP command loop indefinitely. It sends the Exit ACK before closing the socket and returning success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
+Frequency commands use a zero-based RX channel. `SET_FREQUENCY` accepts whole kHz and converts to Hz internally; it validates the active frontend's range, tunes RX only, and returns applied frequency in Hz. `GET_FREQUENCY` performs libbladeRF hardware readback on BladeRF. HackRF has no frequency-get API, so it returns the last frequency successfully requested by this process; before the first successful SET it returns status `3` (`NOT_CONFIGURED`). Other statuses are `4` no active/open frontend, `5` invalid RX channel, `6` outside the advertised range, and `7` backend operation failed.
+
+Selecting the currently active frontend leaves its open handle untouched. Selecting another valid frontend closes the previous device handle before opening the new one. `frontend_id=0xff` is the neutral selection: it closes all open device handles and clears the active ID, responding with status `0` and active ID `0xff`. Exit closes any remaining handles after sending its ACK.
+
+Implementation notes from hardware testing: BladeRF provides `get_frequency`, so the response reports its measured/tuned readback. libhackrf exposes `set_freq` but no getter; for HackRF the client can only report the last successful requested frequency, not independently verify the synthesizer's actual output. The command therefore uses integer kHz on input (matching the command catalog's `u32` range) and exact Hz on output (`u64`). A successful software/API response is not an RF calibration measurement. Tests tune both connected frontends to 100 MHz but do not enable RX streaming or TX.
+
+After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
 ### Capability Descriptor
 
@@ -108,7 +116,7 @@ Input/output uses the same schema as the original `device.c`:
 
 ### Optional SDR Discovery Build
 
-The generic frontend inventory works without SDR libraries and reports zero devices. CMake automatically enables BladeRF and/or HackRF discovery when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Frequency/rate/gain configuration, streaming, capture, measurements, and RF command handlers are not implemented yet.
+The generic frontend inventory works without SDR libraries and reports zero devices. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. `SET_FREQUENCY` and `GET_FREQUENCY` configure/read RX tuning only. Sample-rate/bandwidth/gain configuration, RX streaming/capture, measurements, and TX are not implemented yet.
 
 Inspect which optional SDR libraries were linked into this build with:
 
@@ -159,9 +167,9 @@ hackrf_sweep -f 88:108 -w 1000000 -1
 
 Expected: `hackrf_info` reports the board and firmware; `hackrf_sweep` prints measurement bins for 88–108 MHz and exits after one sweep. This tests USB/libhackrf RX access, not the scanner's command handlers.
 
-### Future Hardware Integration
+### Remaining Hardware Integration
 
-The HackRF adapter currently discovers boards and advertises their generic capabilities. Keep libhackrf optional. Before adding tune/capture commands, test frequency/sample-rate/gain configuration and bounded RX capture with a known RF source; do not enable TX as part of these discovery tests.
+The HackRF adapter discovers boards, advertises generic capabilities, and supports RX frequency tuning. Keep libhackrf optional. Before adding capture/measurement commands, test bounded RX capture with a known RF source; do not enable TX as part of these tests.
 
 ## BladeRF Hardware Preparation
 
@@ -221,7 +229,7 @@ Verified on `rpi4` at `10.123.71.141`: both a Nuand bladeRF 2.0 micro (`2cf0:525
 
 `bladeRF-cli --help` documents `-f/--flash-firmware <file>`, `-l/--load-fpga <file>` (volatile load) and `-L/--flash-fpga <file>` (persistent FPGA flash). Use the matching image from `/usr/share/Nuand/bladeRF/` only when the CLI reports that an update/load is required and the exact board variant is known. FPGA flashing is persistent; a wrong image may prevent normal operation. Do not run firmware/FPGA writes as part of routine scanner tests.
 
-The optional libbladeRF backend currently detects the device and queries its ranges. Actual frequency control, RX capture, streaming, and measurement commands still need implementation. `scanner_node/tools/radio_e2e_test.py` runs the real executable against the Python mock and exercises capability query plus logical frontend selection without transmitting RF.
+The optional libbladeRF backend detects the device, queries its ranges, opens/closes a persistent selected handle, and sets/reads RX frequency. RX capture, streaming, measurement, and TX commands still need implementation. `scanner_node/tools/radio_e2e_test.py` runs the real executable against the Python mock, tests both detected frontends at 100 MHz, exercises handle switching and neutral close-all, and exits via `EXIT` without starting an RF stream.
 
 ## Build
 
@@ -449,4 +457,4 @@ Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--devic
 
 ## Tests
 
-`scanner_protocol_tests` checks handshake layout, VER fields, radio command encoding, Exit ACK, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json` from the deployed project directory to exercise the real binary against the Python mock and attached radio. The mock sends Exit last so the process terminates cleanly. This verifies discovery and selection only, not RF capture or measurement. The C# DemoServer does not yet dispatch the experimental radio commands.
+`scanner_protocol_tests` checks handshake layout, VER fields, frontend/frequency command encoding, Exit ACK, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json --frontend-id 0` and repeat with `--frontend-id 1` from the deployed project directory. Each run tunes every detected frontend to 100 MHz, reads it back, switches between handles, selects `0xff` to close all, then exits via Exit ACK. No RX/TX stream is started. The C# DemoServer does not yet dispatch the experimental radio commands.

@@ -10,14 +10,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from tools.demo_server_mock import (  # noqa: E402
     HANDSHAKE_SIZE,
     MockProtocolError,
-    build_exit_request,
-    build_exit_response,
+    build_frequency_response,
+    build_get_frequency_request,
     build_radio_frontends_request,
     build_radio_frontends_response,
     build_exit_request,
     build_exit_response,
     build_set_active_radio_request,
     build_set_active_radio_response,
+    build_set_frequency_request,
     build_ver_request,
     build_ver_response,
     parse_handshake,
@@ -149,9 +150,31 @@ class DemoServerMockTests(unittest.TestCase):
             self.assertEqual(selection, build_set_active_radio_request(9, 0))
             client.sendto(build_set_active_radio_response(9, 0), server.getsockname())
 
+            set_frequency, _ = client.recvfrom(1024)
+            self.assertEqual(set_frequency, build_set_frequency_request(10, 0, 100000))
+            client.sendto(build_frequency_response(10, 0x64, 0, 0, 100000000), server.getsockname())
+
+            get_frequency, _ = client.recvfrom(1024)
+            self.assertEqual(get_frequency, build_get_frequency_request(11, 0))
+            client.sendto(build_frequency_response(11, 0x6A, 0, 0, 100000000), server.getsockname())
+
+            same_selection, _ = client.recvfrom(1024)
+            self.assertEqual(same_selection, build_set_active_radio_request(12, 0))
+            client.sendto(build_set_active_radio_response(12, 0), server.getsockname())
+            same_get, _ = client.recvfrom(1024)
+            self.assertEqual(same_get, build_get_frequency_request(13, 0))
+            client.sendto(build_frequency_response(13, 0x6A, 0, 0, 100000000), server.getsockname())
+
+            neutral, _ = client.recvfrom(1024)
+            self.assertEqual(neutral, build_set_active_radio_request(14, 0xFF))
+            client.sendto(build_set_active_radio_response(14, 0xFF), server.getsockname())
+            inactive_get, _ = client.recvfrom(1024)
+            self.assertEqual(inactive_get, build_get_frequency_request(15, 0))
+            client.sendto(build_frequency_response(15, 0x6A, 4, 0, 0), server.getsockname())
+
             exit_request, _ = client.recvfrom(1024)
-            self.assertEqual(exit_request, build_exit_request(10))
-            client.sendto(build_exit_response(10), server.getsockname())
+            self.assertEqual(exit_request, build_exit_request(16))
+            client.sendto(build_exit_response(16), server.getsockname())
         finally:
             worker.join(timeout=3)
             client.close()
@@ -161,6 +184,8 @@ class DemoServerMockTests(unittest.TestCase):
         self.assertEqual(server_error, [])
         self.assertEqual(server_result[0][2]["frontends"][0]["id"], 0)
         self.assertTrue(server_result[0][2]["exit_acknowledged"])
+        self.assertTrue(server_result[0][2]["neutral_closed"])
+        self.assertEqual(server_result[0][2]["frequencies_hz"], {"0": 100000000})
 
 
 if __name__ == "__main__":

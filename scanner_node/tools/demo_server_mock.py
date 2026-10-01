@@ -17,6 +17,8 @@ VER_COMMAND = 0x01
 RADIO_FRONTENDS_COMMAND = 0x04
 SET_ACTIVE_RADIO_COMMAND = 0x05
 EXIT_COMMAND = 0x06
+SET_FREQUENCY_COMMAND = 0x64
+GET_FREQUENCY_COMMAND = 0x6A
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -154,6 +156,29 @@ def build_set_active_radio_request(request_id, frontend_id):
     return struct.pack("<IBB", request_id, SET_ACTIVE_RADIO_COMMAND, frontend_id)
 
 
+def build_set_frequency_request(request_id, channel, frequency_khz):
+    return struct.pack("<IBBI", request_id, SET_FREQUENCY_COMMAND, channel, frequency_khz)
+
+
+def build_get_frequency_request(request_id, channel):
+    return struct.pack("<IBB", request_id, GET_FREQUENCY_COMMAND, channel)
+
+
+def build_frequency_response(request_id, command, status, channel, frequency_hz):
+    return struct.pack("<IBBBQ", request_id, command, status, channel, frequency_hz)
+
+
+def validate_frequency_response(payload, expected_id, expected_command, expected_channel, expected_frequency_hz,
+                                expected_status=RADIO_STATUS_OK):
+    if len(payload) != 15:
+        raise MockProtocolError("frequency response has {} bytes, expected 15".format(len(payload)))
+    request_id, command, status, channel, frequency_hz = struct.unpack("<IBBBQ", payload)
+    if request_id != expected_id or command != expected_command:
+        raise MockProtocolError("frequency response request id or command mismatch")
+    if status != expected_status or channel != expected_channel or frequency_hz != expected_frequency_hz:
+        raise MockProtocolError("frequency response status, channel, or readback mismatch")
+
+
 def build_exit_request(request_id):
     return struct.pack("<IB", request_id, EXIT_COMMAND)
 
@@ -257,13 +282,68 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
             if frontend_id not in {item["id"] for item in radio_result["frontends"]}:
                 raise MockProtocolError("requested active frontend id is not available")
 
-            select_id = next_request_id(query_id)
-            sock.sendto(build_set_active_radio_request(select_id, frontend_id), client_endpoint)
-            select_response, select_source = sock.recvfrom(65535)
-            if select_source != source:
-                raise MockProtocolError("active radio response came from an unexpected endpoint")
-            validate_set_active_radio_response(select_response, select_id, frontend_id)
-            exit_after_id = select_id
+            frontend_ids = [frontend_id] + [item["id"] for item in radio_result["frontends"]
+                                             if item["id"] != frontend_id]
+            frequencies_hz = {}
+            request_cursor = query_id
+            for selected_id in frontend_ids:
+                select_id = next_request_id(request_cursor)
+                sock.sendto(build_set_active_radio_request(select_id, selected_id), client_endpoint)
+                select_response, select_source = sock.recvfrom(65535)
+                if select_source != source:
+                    raise MockProtocolError("active radio response came from an unexpected endpoint")
+                validate_set_active_radio_response(select_response, select_id, selected_id)
+
+                set_frequency_id = next_request_id(select_id)
+                requested_frequency_khz = 100000
+                sock.sendto(build_set_frequency_request(set_frequency_id, 0, requested_frequency_khz),
+                            client_endpoint)
+                set_frequency_response, set_frequency_source = sock.recvfrom(65535)
+                if set_frequency_source != source:
+                    raise MockProtocolError("SET_FREQUENCY response came from an unexpected endpoint")
+                frequency_hz = requested_frequency_khz * 1000
+                validate_frequency_response(set_frequency_response, set_frequency_id, SET_FREQUENCY_COMMAND, 0,
+                                            frequency_hz)
+
+                get_frequency_id = next_request_id(set_frequency_id)
+                sock.sendto(build_get_frequency_request(get_frequency_id, 0), client_endpoint)
+                get_frequency_response, get_frequency_source = sock.recvfrom(65535)
+                if get_frequency_source != source:
+                    raise MockProtocolError("GET_FREQUENCY response came from an unexpected endpoint")
+                validate_frequency_response(get_frequency_response, get_frequency_id, GET_FREQUENCY_COMMAND, 0,
+                                            frequency_hz)
+                frequencies_hz[str(selected_id)] = frequency_hz
+                same_select_id = next_request_id(get_frequency_id)
+                sock.sendto(build_set_active_radio_request(same_select_id, selected_id), client_endpoint)
+                same_select_response, same_select_source = sock.recvfrom(65535)
+                if same_select_source != source:
+                    raise MockProtocolError("same-frontend selection response came from an unexpected endpoint")
+                validate_set_active_radio_response(same_select_response, same_select_id, selected_id)
+
+                same_get_id = next_request_id(same_select_id)
+                sock.sendto(build_get_frequency_request(same_get_id, 0), client_endpoint)
+                same_get_response, same_get_source = sock.recvfrom(65535)
+                if same_get_source != source:
+                    raise MockProtocolError("frequency readback after same selection came from an unexpected endpoint")
+                validate_frequency_response(same_get_response, same_get_id, GET_FREQUENCY_COMMAND, 0, frequency_hz)
+                request_cursor = same_get_id
+
+            neutral_id = next_request_id(request_cursor)
+            sock.sendto(build_set_active_radio_request(neutral_id, 0xFF), client_endpoint)
+            neutral_response, neutral_source = sock.recvfrom(65535)
+            if neutral_source != source:
+                raise MockProtocolError("neutral frontend selection came from an unexpected endpoint")
+            validate_set_active_radio_response(neutral_response, neutral_id, 0xFF)
+            inactive_frequency_id = next_request_id(neutral_id)
+            sock.sendto(build_get_frequency_request(inactive_frequency_id, 0), client_endpoint)
+            inactive_frequency_response, inactive_frequency_source = sock.recvfrom(65535)
+            if inactive_frequency_source != source:
+                raise MockProtocolError("inactive frequency response came from an unexpected endpoint")
+            validate_frequency_response(inactive_frequency_response, inactive_frequency_id, GET_FREQUENCY_COMMAND,
+                                        0, 0, expected_status=4)
+            radio_result["frequencies_hz"] = frequencies_hz
+            radio_result["neutral_closed"] = True
+            exit_after_id = inactive_frequency_id
 
         exit_id = next_request_id(exit_after_id)
         sock.sendto(build_exit_request(exit_id), client_endpoint)

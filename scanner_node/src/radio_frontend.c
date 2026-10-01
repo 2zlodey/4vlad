@@ -88,6 +88,7 @@ static void discover_bladerf(ScannerRadioInventory *inventory)
     memset(frontend, 0, sizeof(*frontend));
     frontend->id = (uint8_t)inventory->count;
     frontend->backend = SCANNER_RADIO_BACKEND_BLADERF;
+    frontend->backend_index = 0;
     frontend->rx_channels = (uint8_t)bladerf_get_channel_count(device, BLADERF_RX);
     frontend->tx_channels = (uint8_t)bladerf_get_channel_count(device, BLADERF_TX);
     frontend->flags = SCANNER_RADIO_FLAG_FULL_DUPLEX;
@@ -160,6 +161,7 @@ static void discover_hackrf(ScannerRadioInventory *inventory)
         memset(frontend, 0, sizeof(*frontend));
         frontend->id = (uint8_t)inventory->count;
         frontend->backend = SCANNER_RADIO_BACKEND_HACKRF;
+        frontend->backend_index = (uint8_t)index;
         frontend->rx_channels = 1;
         frontend->tx_channels = 1;
         frontend->capabilities = SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TX | SCANNER_RADIO_CAP_TUNE
@@ -219,18 +221,154 @@ void scanner_radio_discover(ScannerRadioInventory *inventory)
 
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
 {
+    ScannerRadioFrontend *target = NULL;
     size_t index;
     if (inventory == NULL)
         return 0;
+
+    if (frontend_id == SCANNER_RADIO_ID_NONE)
+    {
+        scanner_radio_close_all(inventory);
+        return 1;
+    }
+
     for (index = 0; index < inventory->count; ++index)
     {
         if (inventory->frontends[index].id == frontend_id)
         {
-            inventory->active_id = frontend_id;
-            return 1;
+            target = &inventory->frontends[index];
+            break;
         }
     }
-    return 0;
+    if (target == NULL)
+        return 0;
+    if (inventory->active_id == frontend_id && target->device_handle != NULL)
+        return 1;
+
+    for (index = 0; index < inventory->count; ++index)
+    {
+        ScannerRadioFrontend *frontend = &inventory->frontends[index];
+        if (frontend->device_handle == NULL)
+            continue;
+#ifdef SCANNER_HAVE_BLADERF
+        if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
+            bladerf_close((struct bladerf *)frontend->device_handle);
+#endif
+#ifdef SCANNER_HAVE_HACKRF
+        if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
+            hackrf_close((hackrf_device *)frontend->device_handle);
+#endif
+        frontend->device_handle = NULL;
+        frontend->configured_frequency_hz = 0;
+        frontend->frequency_configured = 0;
+    }
+    inventory->active_id = SCANNER_RADIO_ID_NONE;
+
+    if (target->backend == SCANNER_RADIO_BACKEND_BLADERF)
+    {
+#ifdef SCANNER_HAVE_BLADERF
+        struct bladerf *device = NULL;
+        struct bladerf_devinfo *devices = NULL;
+        int device_count = bladerf_get_device_list(&devices);
+        int open_status = -1;
+        if (device_count > (int)target->backend_index && devices != NULL)
+            open_status = bladerf_open_with_devinfo(&device, &devices[target->backend_index]);
+        bladerf_free_device_list(devices);
+        if (open_status != 0)
+            return 0;
+        target->device_handle = device;
+        {
+            bladerf_frequency frequency;
+            if (bladerf_get_frequency(device, BLADERF_CHANNEL_RX(0), &frequency) == 0)
+            {
+                target->configured_frequency_hz = frequency;
+                target->frequency_configured = 1;
+            }
+        }
+#else
+        return 0;
+#endif
+    }
+    else if (target->backend == SCANNER_RADIO_BACKEND_HACKRF)
+    {
+#ifdef SCANNER_HAVE_HACKRF
+        hackrf_device_list_t *devices;
+        hackrf_device *device = NULL;
+        if (!inventory->hackrf_initialized)
+        {
+            if (hackrf_init() != HACKRF_SUCCESS)
+                return 0;
+            inventory->hackrf_initialized = 1;
+        }
+        devices = hackrf_device_list();
+        if (devices == NULL)
+        {
+            hackrf_exit();
+            inventory->hackrf_initialized = 0;
+            return 0;
+        }
+        if (devices->devicecount > (int)target->backend_index)
+            (void)hackrf_device_list_open(devices, (int)target->backend_index, &device);
+        hackrf_device_list_free(devices);
+        if (device == NULL)
+        {
+            if (inventory->hackrf_initialized)
+            {
+                hackrf_exit();
+                inventory->hackrf_initialized = 0;
+            }
+            return 0;
+        }
+        target->device_handle = device;
+#else
+        return 0;
+#endif
+    }
+    else if (target->backend == SCANNER_RADIO_BACKEND_UNKNOWN)
+    {
+        inventory->active_id = frontend_id;
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+
+    inventory->active_id = frontend_id;
+    return 1;
+}
+
+void scanner_radio_close_all(ScannerRadioInventory *inventory)
+{
+    size_t index;
+    if (inventory == NULL)
+        return;
+
+    for (index = 0; index < inventory->count; ++index)
+    {
+        ScannerRadioFrontend *frontend = &inventory->frontends[index];
+        if (frontend->device_handle == NULL)
+            continue;
+#ifdef SCANNER_HAVE_BLADERF
+        if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
+            bladerf_close((struct bladerf *)frontend->device_handle);
+#endif
+#ifdef SCANNER_HAVE_HACKRF
+        if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
+            hackrf_close((hackrf_device *)frontend->device_handle);
+#endif
+        frontend->device_handle = NULL;
+        frontend->configured_frequency_hz = 0;
+        frontend->frequency_configured = 0;
+    }
+#ifdef SCANNER_HAVE_HACKRF
+    if (inventory->hackrf_initialized)
+    {
+        hackrf_exit();
+        inventory->hackrf_initialized = 0;
+    }
+#endif
+    inventory->active_id = SCANNER_RADIO_ID_NONE;
 }
 
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory)
@@ -257,4 +395,78 @@ const char *scanner_radio_backend_name(ScannerRadioBackend backend)
     default:
         return "Unknown";
     }
+}
+
+int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
+                                uint64_t *actual_frequency_hz)
+{
+    ScannerRadioFrontend *frontend;
+    if (inventory == NULL || actual_frequency_hz == NULL)
+        return 0;
+    frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
+    if (frontend == NULL || frontend->device_handle == NULL || channel >= frontend->rx_channels
+        || frequency_hz < frontend->frequency_min_hz || frequency_hz > frontend->frequency_max_hz)
+        return 0;
+
+    if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
+    {
+#ifdef SCANNER_HAVE_BLADERF
+        bladerf_frequency actual;
+        struct bladerf *device = (struct bladerf *)frontend->device_handle;
+        if (bladerf_set_frequency(device, BLADERF_CHANNEL_RX(channel), frequency_hz) != 0
+            || bladerf_get_frequency(device, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+            return 0;
+        frontend->configured_frequency_hz = actual;
+#else
+        return 0;
+#endif
+    }
+    else if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
+    {
+#ifdef SCANNER_HAVE_HACKRF
+        if (channel != 0 || hackrf_set_freq((hackrf_device *)frontend->device_handle, frequency_hz) != HACKRF_SUCCESS)
+            return 0;
+        frontend->configured_frequency_hz = frequency_hz;
+#else
+        return 0;
+#endif
+    }
+    else
+    {
+        return 0;
+    }
+
+    frontend->frequency_configured = 1;
+    *actual_frequency_hz = frontend->configured_frequency_hz;
+    return 1;
+}
+
+int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz)
+{
+    ScannerRadioFrontend *frontend;
+    if (inventory == NULL || frequency_hz == NULL)
+        return 0;
+    frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
+    if (frontend == NULL || frontend->device_handle == NULL || channel >= frontend->rx_channels)
+        return 0;
+
+    if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
+    {
+#ifdef SCANNER_HAVE_BLADERF
+        bladerf_frequency actual;
+        if (bladerf_get_frequency((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+            return 0;
+        frontend->configured_frequency_hz = actual;
+        frontend->frequency_configured = 1;
+#else
+        return 0;
+#endif
+    }
+    else if (!frontend->frequency_configured)
+    {
+        return -1;
+    }
+
+    *frequency_hz = frontend->configured_frequency_hz;
+    return 1;
 }

@@ -55,6 +55,10 @@ typedef struct
     uint8_t reserved;
     uint32_t bandwidth_options[SCANNER_RADIO_MAX_BANDWIDTH_OPTIONS];
     ScannerRadioBackend backend;
+    uint8_t backend_index;
+    void *device_handle;
+    uint64_t configured_frequency_hz;
+    uint8_t frequency_configured;
     char name[64];
 } ScannerRadioFrontend;
 
@@ -63,11 +67,16 @@ typedef struct
     ScannerRadioFrontend frontends[SCANNER_RADIO_MAX_FRONTENDS];
     size_t count;
     uint8_t active_id;
+    int hackrf_initialized;
 } ScannerRadioInventory;
 
 void scanner_radio_discover(ScannerRadioInventory *inventory);
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id);
+void scanner_radio_close_all(ScannerRadioInventory *inventory);
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory);
+int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
+                                uint64_t *actual_frequency_hz);
+int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz);
 const char *scanner_radio_backend_name(ScannerRadioBackend backend);
 
 #endif
