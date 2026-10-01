@@ -25,7 +25,8 @@ typedef enum
 {
     SCANNER_RADIO_BACKEND_UNKNOWN = 0,
     SCANNER_RADIO_BACKEND_BLADERF = 1,
-    SCANNER_RADIO_BACKEND_HACKRF = 2
+    SCANNER_RADIO_BACKEND_HACKRF = 2,
+    SCANNER_RADIO_BACKEND_STUB = 3
 } ScannerRadioBackend;
 
 typedef struct
@@ -71,6 +72,7 @@ typedef struct
 } ScannerRadioInventory;
 
 void scanner_radio_discover(ScannerRadioInventory *inventory);
+int scanner_radio_add_stub(ScannerRadioInventory *inventory);
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id);
 void scanner_radio_close_all(ScannerRadioInventory *inventory);
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory);

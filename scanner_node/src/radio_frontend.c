@@ -204,6 +204,35 @@ cleanup:
 }
 #endif
 
+int scanner_radio_add_stub(ScannerRadioInventory *inventory)
+{
+#ifdef SCANNER_ENABLE_STUB_SDR
+    ScannerRadioFrontend *frontend;
+
+    if (inventory == NULL || inventory->count >= SCANNER_RADIO_MAX_FRONTENDS)
+        return 0;
+
+    frontend = &inventory->frontends[inventory->count];
+    memset(frontend, 0, sizeof(*frontend));
+    frontend->id = (uint8_t)inventory->count;
+    frontend->backend = SCANNER_RADIO_BACKEND_STUB;
+    frontend->rx_channels = 1;
+    frontend->capabilities = SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TUNE;
+    frontend->frequency_min_hz = SCANNER_COMMON_FREQUENCY_MIN_HZ;
+    frontend->frequency_max_hz = SCANNER_COMMON_FREQUENCY_MAX_HZ;
+    frontend->frequency_step_hz = 1000;
+    frontend->sample_resolution_bits = 8;
+    frontend->iq_sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
+    frontend->antenna_paths = 1;
+    snprintf(frontend->name, sizeof(frontend->name), "%s", "Stub SDR (in-memory)");
+    inventory->count++;
+    return 1;
+#else
+    (void)inventory;
+    return 0;
+#endif
+}
+
 void scanner_radio_discover(ScannerRadioInventory *inventory)
 {
     if (inventory == NULL)
@@ -217,6 +246,8 @@ void scanner_radio_discover(ScannerRadioInventory *inventory)
 #ifdef SCANNER_HAVE_HACKRF
     discover_hackrf(inventory);
 #endif
+    if (inventory->count == 0)
+        (void)scanner_radio_add_stub(inventory);
 }
 
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
@@ -324,6 +355,13 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
         return 0;
 #endif
     }
+    else if (target->backend == SCANNER_RADIO_BACKEND_STUB)
+    {
+        /* A non-null marker makes the stub participate in the normal active-radio path. */
+        target->device_handle = target;
+        target->configured_frequency_hz = 0;
+        target->frequency_configured = 0;
+    }
     else if (target->backend == SCANNER_RADIO_BACKEND_UNKNOWN)
     {
         inventory->active_id = frontend_id;
@@ -392,6 +430,8 @@ const char *scanner_radio_backend_name(ScannerRadioBackend backend)
         return "BladeRF";
     case SCANNER_RADIO_BACKEND_HACKRF:
         return "HackRF";
+    case SCANNER_RADIO_BACKEND_STUB:
+        return "Stub SDR";
     default:
         return "Unknown";
     }
@@ -430,6 +470,10 @@ int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channe
 #else
         return 0;
 #endif
+    }
+    else if (frontend->backend == SCANNER_RADIO_BACKEND_STUB)
+    {
+        frontend->configured_frequency_hz = frequency_hz;
     }
     else
     {

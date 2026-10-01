@@ -114,9 +114,29 @@ Input/output uses the same schema as the original `device.c`:
 
 ## HackRF Hardware Setup
 
+### Stub SDR For Server Development
+
+The CMake option `SCANNER_ENABLE_STUB_SDR` is enabled by default. If the compiled physical backends find no radio, discovery adds one in-memory `Stub SDR`; when a real HackRF or BladeRF is found, the stub is not added. Disable it with `-DSCANNER_ENABLE_STUB_SDR=OFF` to test the explicit no-radio case.
+
+The stub advertises one 8-bit RX channel and only RX+tune capabilities over the shared `70 MHz..6 GHz` tuning range. Selecting it allocates no hardware handle; `SET_FREQUENCY` stores the requested frequency in process memory and `GET_FREQUENCY` returns that stored value. It does not create I/Q samples, tune a physical device, implement sample-rate/bandwidth/gain control, or transmit RF. It is a control-protocol stand-in for server development, not a signal simulator.
+
+Run the full network plus radio-command round-trip against the Python mock without SDR libraries or hardware:
+
+```powershell
+python tools/demo_server_mock.py --bind-address 127.0.0.1 --port 2653 --radio-commands --clients 1
+```
+
+In another terminal, from the `scanner_node` directory:
+
+```powershell
+tools/radio_e2e_test.py --client build/scanner_node.exe --device-json ../device.json
+```
+
+Expected: the scanner reports one `Stub SDR`, the mock completes frontend query, selection, 100 MHz set/get, neutral close and EXIT, and the script prints `E2E PASS`. The mock supplies a test capability response; the E2E script queries the frontend descriptor returned by the client and checks its operations. With optional physical backends compiled and hardware detected, discovery uses the real devices and does not add the stub fallback.
+
 ### Optional SDR Discovery Build
 
-The generic frontend inventory works without SDR libraries and reports zero devices. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. `SET_FREQUENCY` and `GET_FREQUENCY` configure/read RX tuning only. Sample-rate/bandwidth/gain configuration, RX streaming/capture, measurements, and TX are not implemented yet.
+The generic frontend inventory works without SDR libraries; by default it falls back to the stub described above. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. `SET_FREQUENCY` and `GET_FREQUENCY` configure/read RX tuning only. Sample-rate/bandwidth/gain configuration, RX streaming/capture, measurements, and TX are not implemented yet.
 
 Inspect which optional SDR libraries were linked into this build with:
 
@@ -250,6 +270,7 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 CMake uses Winsock (`ws2_32`) on Windows and POSIX sockets on Linux/macOS.
+`SCANNER_ENABLE_STUB_SDR` defaults to `ON`; build with `-DSCANNER_ENABLE_STUB_SDR=OFF` only when an empty frontend inventory is specifically desired.
 
 ## Manual Deployment And Full Check
 
@@ -457,4 +478,6 @@ Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--devic
 
 ## Tests
 
-`scanner_protocol_tests` checks handshake layout, VER fields, frontend/frequency command encoding, Exit ACK, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json --frontend-id 0` and repeat with `--frontend-id 1` from the deployed project directory. Each run tunes every detected frontend to 100 MHz, reads it back, switches between handles, selects `0xff` to close all, then exits via Exit ACK. No RX/TX stream is started. The C# DemoServer does not yet dispatch the experimental radio commands.
+`scanner_protocol_tests` checks handshake layout, VER fields, frontend/frequency command encoding, Exit ACK, stub control behavior when enabled, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback.
+
+For a no-hardware end-to-end radio command test, start the Python mock with `--radio-commands` as shown in **Stub SDR For Server Development**, then run `tools/radio_e2e_test.py --client build/scanner_node.exe --device-json ../device.json` from the `scanner_node` directory. When the stub is enabled (default), the client should report one stub frontend. The test tunes each reported frontend to 100 MHz, reads it back, switches/neutral-closes it, and exits via ACK. No RX/TX stream is started. With physical backends enabled and radios attached, the same E2E tool exercises detected devices. The C# DemoServer does not yet dispatch these experimental radio commands.

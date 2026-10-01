@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(orkestr_scanner_node VERSION 0.1.0 LANGUAGES C)
 
+option(SCANNER_ENABLE_STUB_SDR "Provide an in-memory SDR frontend when no physical radio is found" ON)
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -21,6 +23,12 @@ endif()
 
 add_library(scanner_radio STATIC src/radio_frontend.c)
 target_include_directories(scanner_radio PUBLIC include)
+if(SCANNER_ENABLE_STUB_SDR)
+    target_compile_definitions(scanner_radio PUBLIC SCANNER_ENABLE_STUB_SDR=1)
+    message(STATUS "Stub SDR fallback enabled")
+else()
+    message(STATUS "Stub SDR fallback disabled")
+endif()
 
 find_path(SCANNER_BLADERF_INCLUDE_DIR NAMES libbladeRF.h)
 find_library(SCANNER_BLADERF_LIBRARY NAMES bladerf libbladeRF)

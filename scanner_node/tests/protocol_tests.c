@@ -41,6 +41,11 @@ int main(int argc, char **argv)
     ScannerSetFrequencyRequest set_frequency_request;
     ScannerGetFrequencyRequest get_frequency_request;
     ScannerRadioInventory inventory;
+#ifdef SCANNER_ENABLE_STUB_SDR
+    ScannerRadioInventory stub_inventory;
+    uint64_t actual_frequency_hz;
+    uint64_t readback_frequency_hz;
+#endif
     size_t frontends_response_size;
     char error[256];
     size_t index;
@@ -187,6 +192,26 @@ int main(int argc, char **argv)
     ok &= require_true(scanner_radio_select(&inventory, SCANNER_RADIO_ID_NONE)
                            && scanner_radio_active(&inventory) == NULL,
                        "Neutral frontend selection did not clear the active radio");
+
+#ifdef SCANNER_ENABLE_STUB_SDR
+    memset(&stub_inventory, 0, sizeof(stub_inventory));
+    stub_inventory.active_id = SCANNER_RADIO_ID_NONE;
+    ok &= require_true(scanner_radio_add_stub(&stub_inventory), "Stub SDR creation failed");
+    ok &= require_true(stub_inventory.count == 1 && stub_inventory.frontends[0].rx_channels == 1
+                           && stub_inventory.frontends[0].tx_channels == 0
+                           && stub_inventory.frontends[0].capabilities
+                                  == (SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TUNE),
+                       "Stub SDR advertised unexpected capabilities");
+    ok &= require_true(scanner_radio_select(&stub_inventory, 0), "Stub SDR selection failed");
+    ok &= require_true(scanner_radio_set_frequency(&stub_inventory, 0, UINT64_C(100000000), &actual_frequency_hz)
+                           && actual_frequency_hz == UINT64_C(100000000),
+                       "Stub SDR frequency set did not return the requested frequency");
+    ok &= require_true(scanner_radio_get_frequency(&stub_inventory, 0, &readback_frequency_hz)
+                           && readback_frequency_hz == UINT64_C(100000000),
+                       "Stub SDR frequency readback failed");
+    scanner_radio_close_all(&stub_inventory);
+    ok &= require_true(scanner_radio_active(&stub_inventory) == NULL, "Stub SDR close-all did not clear selection");
+#endif
 
     remove(argv[2]);
     return ok ? 0 : 1;
