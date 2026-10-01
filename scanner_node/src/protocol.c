@@ -259,7 +259,7 @@ size_t scanner_encode_gain_response(uint8_t output[9], uint32_t request_id, uint
 }
 
 size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uint8_t command, uint8_t status,
-                                     uint8_t channel, int16_t power_cdbfs)
+                                     uint8_t channel, int16_t noise_floor_cdbfs)
 {
     if (output == NULL || (command != SCANNER_MEASURE_CURRENT_COMMAND && command != SCANNER_MEASURE_FREQUENCY_COMMAND))
         return 0;
@@ -267,7 +267,7 @@ size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uin
     output[4] = command;
     output[5] = status;
     output[6] = channel;
-    write_le(output + 7, (uint16_t)power_cdbfs, 2);
+    write_le(output + 7, (uint16_t)noise_floor_cdbfs, 2);
     return 9;
 }
 
@@ -295,12 +295,12 @@ size_t scanner_encode_raw_iq_response(uint8_t *output, size_t capacity, uint32_t
 
 size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
-                                     const int16_t *power_cdbfs)
+                                     const int16_t *noise_floor_cdbfs)
 {
     size_t required_size = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + (size_t)count * 6u;
     size_t index;
     if (output == NULL || count > SCANNER_MAX_SWEEP_POINTS || capacity < required_size
-        || (count > 0 && (frequency_khz == NULL || power_cdbfs == NULL)))
+        || (count > 0 && (frequency_khz == NULL || noise_floor_cdbfs == NULL)))
         return 0;
     write_le(output, request_id, 4);
     output[4] = SCANNER_SWEEP_COMMAND;
@@ -311,7 +311,7 @@ size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t 
     {
         size_t offset = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + index * 6u;
         write_le(output + offset, frequency_khz[index], 4);
-        write_le(output + offset + 4, (uint16_t)power_cdbfs[index], 2);
+        write_le(output + offset + 4, (uint16_t)noise_floor_cdbfs[index], 2);
     }
     return required_size;
 }

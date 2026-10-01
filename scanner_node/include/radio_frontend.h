@@ -106,8 +106,9 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
 int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
                              size_t output_capacity, size_t *output_size, uint8_t *sample_format,
                              unsigned int timeout_ms);
-int scanner_radio_measure_power(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
-                                int16_t *power_cdbfs, unsigned int timeout_ms);
+/* Capture a bounded I/Q window and delegate its noise-floor estimate to scanner_dsp. */
+int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
+                                      int16_t *noise_floor_cdbfs, unsigned int timeout_ms);
 const char *scanner_radio_backend_name(ScannerRadioBackend backend);
 
 #endif

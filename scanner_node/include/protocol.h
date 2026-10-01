@@ -164,12 +164,12 @@ size_t scanner_encode_gain_stage_response(uint8_t output[8], uint32_t request_id
 size_t scanner_encode_gain_response(uint8_t output[9], uint32_t request_id, uint8_t status, uint8_t channel,
                                     int16_t gain_cdb);
 size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uint8_t command, uint8_t status,
-                                     uint8_t channel, int16_t power_cdbfs);
+                                     uint8_t channel, int16_t noise_floor_cdbfs);
 size_t scanner_encode_raw_iq_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                       uint8_t channel, uint8_t format, uint16_t complex_pairs, const uint8_t *iq,
                                       size_t iq_size);
 size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
-                                     const int16_t *power_cdbfs);
+                                     const int16_t *noise_floor_cdbfs);
 
 #endif

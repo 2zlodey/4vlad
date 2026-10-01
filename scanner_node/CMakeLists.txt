@@ -20,11 +20,15 @@ add_library(scanner_protocol STATIC
 target_include_directories(scanner_protocol PUBLIC include)
 target_link_libraries(scanner_protocol PUBLIC cjson)
 
+add_library(scanner_dsp STATIC src/dsp.c)
+target_include_directories(scanner_dsp PUBLIC include)
+if(UNIX)
+    target_link_libraries(scanner_dsp PUBLIC m)
+endif()
+
 add_library(scanner_radio STATIC src/radio_frontend.c)
 target_include_directories(scanner_radio PUBLIC include)
-if(UNIX)
-    target_link_libraries(scanner_radio PUBLIC m)
-endif()
+target_link_libraries(scanner_radio PUBLIC scanner_dsp)
 if(SCANNER_ENABLE_STUB_SDR)
     target_compile_definitions(scanner_radio PUBLIC SCANNER_ENABLE_STUB_SDR=1)
     message(STATUS "Stub SDR fallback enabled")
@@ -68,10 +72,12 @@ endif()
 
 if(MSVC)
     target_compile_options(scanner_protocol PRIVATE /W4)
+    target_compile_options(scanner_dsp PRIVATE /W4)
     target_compile_options(scanner_radio PRIVATE /W4)
     target_compile_options(scanner_node PRIVATE /W4)
 else()
     target_compile_options(scanner_protocol PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(scanner_dsp PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_radio PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_node PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -88,6 +94,15 @@ if(BUILD_TESTING)
     add_test(NAME scanner_protocol_tests COMMAND scanner_protocol_tests
         "${CMAKE_CURRENT_SOURCE_DIR}/../device.json"
         "${CMAKE_CURRENT_BINARY_DIR}/device-roundtrip.json")
+
+    add_executable(scanner_dsp_tests tests/dsp_tests.c)
+    target_link_libraries(scanner_dsp_tests PRIVATE scanner_dsp)
+    if(MSVC)
+        target_compile_options(scanner_dsp_tests PRIVATE /W4)
+    else()
+        target_compile_options(scanner_dsp_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME scanner_dsp_tests COMMAND scanner_dsp_tests)
 
     add_executable(scanner_udp_integration_tests
         tests/udp_integration_tests.c

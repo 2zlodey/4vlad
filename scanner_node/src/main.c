@@ -514,7 +514,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
     if (scanner_decode_measure_current_request(datagram->payload, datagram->size, &get_value_request))
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
-        int16_t power_cdbfs = 0;
+        int16_t noise_floor_cdbfs = 0;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -522,12 +522,12 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!scanner_radio_measure_power(inventory, get_value_request.channel, 1024, &power_cdbfs,
-                                              SCANNER_CAPTURE_TIMEOUT_MS))
+        else if (!scanner_radio_measure_noise_floor(inventory, get_value_request.channel, 1024, &noise_floor_cdbfs,
+                                                    SCANNER_CAPTURE_TIMEOUT_MS))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
                                                       SCANNER_MEASURE_CURRENT_COMMAND, status,
-                                                      get_value_request.channel, power_cdbfs);
+                                                      get_value_request.channel, noise_floor_cdbfs);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -537,7 +537,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t actual_hz = 0;
-        int16_t power_cdbfs = 0;
+        int16_t noise_floor_cdbfs = 0;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -548,21 +548,22 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
         else if (!scanner_radio_set_frequency(inventory, measure_frequency_request.channel,
                                               (uint64_t)measure_frequency_request.frequency_khz * 1000u, &actual_hz))
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
-        else if (!scanner_radio_measure_power(inventory, measure_frequency_request.channel, 1024, &power_cdbfs,
-                                              SCANNER_CAPTURE_TIMEOUT_MS))
+        else if (!scanner_radio_measure_noise_floor(inventory, measure_frequency_request.channel, 1024,
+                                                    &noise_floor_cdbfs, SCANNER_CAPTURE_TIMEOUT_MS))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
                                                       SCANNER_MEASURE_FREQUENCY_COMMAND, status,
-                                                      measure_frequency_request.channel, power_cdbfs);
+                                                      measure_frequency_request.channel, noise_floor_cdbfs);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
 
+    /* SWEEP returns one DSP-estimated noise-floor level per tuned frequency. */
     if (scanner_decode_sweep_request(datagram->payload, datagram->size, &sweep_request))
     {
         uint32_t frequencies[SCANNER_MAX_SWEEP_POINTS];
-        int16_t powers[SCANNER_MAX_SWEEP_POINTS];
+        int16_t noise_floors_cdbfs[SCANNER_MAX_SWEEP_POINTS];
         uint16_t count = 0;
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t point_count;
@@ -598,8 +599,8 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
                 }
                 frequencies[count] = (uint32_t)current_khz;
                 if (!scanner_radio_set_frequency(inventory, sweep_request.channel, current_khz * 1000u, &actual_hz)
-                    || !scanner_radio_measure_power(inventory, sweep_request.channel, 256, &powers[count],
-                                                    SCANNER_CAPTURE_TIMEOUT_MS))
+                    || !scanner_radio_measure_noise_floor(inventory, sweep_request.channel, 256,
+                                                          &noise_floors_cdbfs[count], SCANNER_CAPTURE_TIMEOUT_MS))
                 {
                     status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
                     count = 0;
@@ -613,12 +614,13 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
             }
         }
         response_size = scanner_encode_sweep_response(response, sizeof(response), sweep_request.request_id, status,
-                                                      sweep_request.channel, count, frequencies, powers);
+                                                      sweep_request.channel, count, frequencies, noise_floors_cdbfs);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
 
+    /* Raw-IQ requests bypass DSP and return the captured sample buffer unchanged. */
     if (scanner_decode_raw_iq_request(datagram->payload, datagram->size, &raw_iq_request))
     {
         uint8_t iq[SCANNER_MAX_RAW_IQ_PAIRS * 4u];

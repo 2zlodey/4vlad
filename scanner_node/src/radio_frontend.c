@@ -4,6 +4,8 @@
 
 #include "radio_frontend.h"
 
+#include "dsp.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1076,62 +1078,37 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
     return 0;
 }
 
-int scanner_radio_measure_power(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
-                                int16_t *power_cdbfs, unsigned int timeout_ms)
+int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
+                                      int16_t *noise_floor_cdbfs, unsigned int timeout_ms)
 {
     uint8_t *iq;
-    uint8_t format;
+    uint8_t radio_format;
+    uint8_t dsp_format;
     size_t size = 0;
-    size_t index;
-    long double sum = 0.0L;
-    long double full_scale;
-    long double ratio;
-    long double dbfs;
     int result;
-    if (power_cdbfs == NULL || complex_pairs == 0 || complex_pairs > SCANNER_RADIO_MAX_IQ_PAIRS)
+    if (noise_floor_cdbfs == NULL || complex_pairs == 0 || complex_pairs > SCANNER_RADIO_MAX_IQ_PAIRS)
         return 0;
     iq = (uint8_t *)malloc((size_t)complex_pairs * 4u);
     if (iq == NULL)
         return 0;
-    result = scanner_radio_capture_iq(inventory, channel, complex_pairs, iq, (size_t)complex_pairs * 4u, &size, &format,
-                                      timeout_ms);
+    result = scanner_radio_capture_iq(inventory, channel, complex_pairs, iq, (size_t)complex_pairs * 4u, &size,
+                                      &radio_format, timeout_ms);
     if (!result)
     {
         free(iq);
         return 0;
     }
-    if (format == SCANNER_RADIO_IQ_FORMAT_S8 && size == (size_t)complex_pairs * 2u)
-    {
-        full_scale = 128.0L;
-        for (index = 0; index < complex_pairs; ++index)
-        {
-            int8_t i_value = (int8_t)iq[index * 2u];
-            int8_t q_value = (int8_t)iq[index * 2u + 1u];
-            sum += (long double)i_value * i_value + (long double)q_value * q_value;
-        }
-    }
-    else if (format == SCANNER_RADIO_IQ_FORMAT_S16 && size == (size_t)complex_pairs * 4u)
-    {
-        full_scale = 2048.0L;
-        for (index = 0; index < complex_pairs; ++index)
-        {
-            int16_t i_value = (int16_t)((uint16_t)iq[index * 4u] | ((uint16_t)iq[index * 4u + 1u] << 8));
-            int16_t q_value = (int16_t)((uint16_t)iq[index * 4u + 2u] | ((uint16_t)iq[index * 4u + 3u] << 8));
-            sum += (long double)i_value * i_value + (long double)q_value * q_value;
-        }
-    }
+    if (radio_format == SCANNER_RADIO_IQ_FORMAT_S8)
+        dsp_format = SCANNER_DSP_IQ_FORMAT_S8;
+    else if (radio_format == SCANNER_RADIO_IQ_FORMAT_S16)
+        dsp_format = SCANNER_DSP_IQ_FORMAT_S16_Q11;
     else
     {
         free(iq);
         return 0;
     }
+
+    result = scanner_dsp_estimate_noise_floor_dbfs(iq, size, complex_pairs, dsp_format, noise_floor_cdbfs);
     free(iq);
-    ratio = sum / ((long double)complex_pairs * 2.0L * full_scale * full_scale);
-    dbfs = ratio <= 0.0L ? -327.68L : 10.0L * log10l(ratio);
-    if (dbfs < -327.68L)
-        dbfs = -327.68L;
-    if (dbfs > 327.67L)
-        dbfs = 327.67L;
-    *power_cdbfs = (int16_t)llroundl(dbfs * 100.0L);
-    return 1;
+    return result;
 }

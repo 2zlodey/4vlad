@@ -250,8 +250,8 @@ int main(int argc, char **argv)
                                                 &iq_format, 100)
                            && memcmp(iq_first, iq_repeat, sizeof(iq_first)) == 0,
                        "Stub SDR IQ was not deterministic for an identical configuration");
-    ok &= require_true(scanner_radio_measure_power(&stub_inventory, 0, 1024, &power_first, 100)
-                           && scanner_radio_measure_power(&stub_inventory, 0, 1024, &power_repeat, 100)
+    ok &= require_true(scanner_radio_measure_noise_floor(&stub_inventory, 0, 1024, &power_first, 100)
+                           && scanner_radio_measure_noise_floor(&stub_inventory, 0, 1024, &power_repeat, 100)
                            && power_first == power_repeat,
                        "Stub SDR power was not deterministic for an identical configuration");
     ok &= require_true(scanner_radio_capture_iq(&stub_inventory, 0, 128, iq_long, sizeof(iq_long), &iq_size, &iq_format,
@@ -262,7 +262,7 @@ int main(int argc, char **argv)
                            && scanner_radio_capture_iq(&stub_inventory, 0, 64, iq_repeat, sizeof(iq_repeat), &iq_size,
                                                        &iq_format, 100)
                            && memcmp(iq_first, iq_repeat, sizeof(iq_first)) != 0
-                           && scanner_radio_measure_power(&stub_inventory, 0, 1024, &power_other_frequency, 100)
+                           && scanner_radio_measure_noise_floor(&stub_inventory, 0, 1024, &power_other_frequency, 100)
                            && power_first != power_other_frequency,
                        "Stub SDR spectrum profile did not change deterministically with frequency");
     ok &= require_true(scanner_radio_set_frequency(&stub_inventory, 0, UINT64_C(100000000), &actual_frequency_hz)

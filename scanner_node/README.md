@@ -37,9 +37,9 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | `0x68` | `SET_BANDWIDTH` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, bandwidth_hz:u32 LE` | Same 11-byte setting response. |
 | `0x66`, `0x67` | `SET_LNA_GAIN`, `SET_VGA_GAIN` | 7 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, gain_db:u8` | 8 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, applied_db:u8` |
 | `0x6b` | `GET_GAIN` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 9 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, total_gain_cdb:i16 LE` |
-| `0x6d` | `MEASURE_CURRENT` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 9 bytes with signed `power_cdbfs:i16 LE`. |
-| `0x02` | `MEASURE_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | Same 9-byte power response; tunes first, then captures. |
-| `0x03` | `SWEEP` | 18 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, start_khz:u32 LE, stop_khz:u32 LE, step_khz:u32 LE` | `9 + count*6` bytes: header `[request_id:u32 LE, opcode, status, channel, count:u16 LE]`, followed by `[frequency_khz:u32 LE, power_cdbfs:i16 LE]` points. |
+| `0x6d` | `MEASURE_CURRENT` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 9 bytes with signed `power_cdbfs:i16 LE` carrying the DSP noise-floor estimate. |
+| `0x02` | `MEASURE_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | Same 9-byte result; tunes first, then captures and estimates noise floor. |
+| `0x03` | `SWEEP` | 18 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, start_khz:u32 LE, stop_khz:u32 LE, step_khz:u32 LE` | `9 + count*6` bytes: header `[request_id:u32 LE, opcode, status, channel, count:u16 LE]`, followed by `[frequency_khz:u32 LE, power_cdbfs:i16 LE]` points; `power_cdbfs` contains the DSP noise-floor estimate. |
 | `0x70` | `GET_RAW_IQ` | 8 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, complex_pairs:u16 LE` | 10-byte header `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE]` followed by interleaved I/Q bytes. |
 | `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
@@ -49,11 +49,13 @@ Frequency commands use a zero-based RX channel. `SET_FREQUENCY` accepts whole kH
 
 Selecting the currently active frontend leaves its open handle untouched. Selecting another valid frontend closes the previous device handle before opening the new one. `frontend_id=0xff` is the neutral selection: it closes all open device handles and clears the active ID, responding with status `0` and active ID `0xff`. Exit closes any remaining handles after sending its ACK.
 
-`SET_SAMPLE_RATE` and `SET_BANDWIDTH` use unsigned Hz and report hardware readback where available. Bandwidth must match an advertised explicit option when the frontend provides a list. Gain commands set backend-specific LNA/VGA stages in integer dB; `GET_GAIN` returns the sum in signed centi-dB. `MEASURE_CURRENT` and `MEASURE_FREQUENCY` average 1024 complex samples; power is `10*log10(mean((I^2+Q^2)/FS^2))` in signed centi-dBFS, clamped to the `int16` range. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, captures 256 complex samples per point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
+`SET_SAMPLE_RATE` and `SET_BANDWIDTH` use unsigned Hz and report hardware readback where available. Bandwidth must match an advertised explicit option when the frontend provides a list. Gain commands set backend-specific LNA/VGA stages in integer dB; `GET_GAIN` returns the sum in signed centi-dB. `MEASURE_CURRENT` and `MEASURE_FREQUENCY` capture 1024 complex samples and pass the raw buffer to the standalone `scanner_dsp` module. DSP computes mean normalized complex-sample power as `10*log10(mean((I^2+Q^2)/FS^2))`, returned as signed centi-dBFS clamped to `int16`. This is the current noise-floor estimate; it does not distinguish broadband noise from a coherent signal and is not calibrated dBm. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, captures 256 complex samples per point, runs the same DSP estimator for each point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs and bypasses DSP, returning the captured buffer. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
 
 The source catalog did not define the wire fields for these operations, so this implementation fixes them as shown above: a 4-byte little-endian RequestId precedes every radio opcode; settings use Hz; gain stage values use dB; measurements use centi-dBFS; and the new raw-IQ opcode is `0x70`. Unknown or malformed datagrams are ignored. The C# DemoServer does not yet dispatch these opcodes; the Python mock supports the extended set with `--full-radio-commands`.
 
 After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
+
+The DSP calculations are isolated in `scanner_dsp`; they consume an I/Q byte buffer plus its format and sample count, and do not depend on SDR handles, sockets, or protocol structs. Raw-IQ and processed-result commands currently share the radio worker and result queue, but the DSP API is independent so a later bounded analysis queue can move expensive classification out of the radio worker without changing the estimator contract.
 
 ### Thread Ownership
 
@@ -346,16 +348,29 @@ The verified Pi image has GCC but not CMake/Make, so use the direct C99 build fr
 
 ```bash
 cd /mnt/scaner-ram/orkestr-scanner/scanner_node
-gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
+  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
   -Iinclude -I../cJSON \
-  src/main.c src/device_config.c src/protocol.c src/udp_socket.c \
-  ../cJSON/cJSON.c -lm -o scanner_node
+  src/main.c src/radio_worker.c src/device_config.c src/protocol.c src/udp_socket.c \
+  src/radio_frontend.c src/dsp.c ../cJSON/cJSON.c \
+  -lm -lbladeRF -lhackrf -o scanner_node
 
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
   -Iinclude -I../cJSON \
-  tests/protocol_tests.c src/device_config.c src/protocol.c ../cJSON/cJSON.c \
-  -lm -o scanner_protocol_tests
+  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
+  tests/protocol_tests.c src/device_config.c src/protocol.c src/radio_frontend.c src/dsp.c \
+  ../cJSON/cJSON.c -lm -lbladeRF -lhackrf -o scanner_protocol_tests
 ./scanner_protocol_tests ../device.json ./device-roundtrip.json
+
+gcc -std=c99 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/dsp_tests.c src/dsp.c \
+  -lm -o scanner_dsp_tests
+./scanner_dsp_tests
+
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
+  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
+  -Iinclude -I../cJSON tests/radio_worker_tests.c src/radio_worker.c src/radio_frontend.c src/dsp.c \
+  -lm -lbladeRF -lhackrf -o scanner_radio_worker_tests
+./scanner_radio_worker_tests
 
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
   -Iinclude tests/udp_integration_tests.c src/udp_socket.c src/protocol.c \
@@ -364,7 +379,7 @@ gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
 ./scanner_node --help
 ```
 
-Expected: `scanner_protocol_tests` exits 0 after JSON load/save/load and packet checks; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
+Expected: protocol, DSP, and worker tests exit 0; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
 
 ### 4. Verify Pi To Windows Mock Across The LAN
 
