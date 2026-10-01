@@ -9,9 +9,11 @@
 #endif
 // clang-format on
 
+#include "analysis_worker.h"
 #include "device_config.h"
 #include "protocol.h"
 #include "radio_worker.h"
+#include "signal_classifier.h"
 #include "udp_socket.h"
 
 #include <errno.h>
@@ -36,6 +38,11 @@ typedef struct
     unsigned int ver_timeout_ms;
     int ignore_session_reply_size;
 } Options;
+
+typedef struct
+{
+    ScannerAnalysisWorker *analysis_worker;
+} ScannerAppContext;
 
 static void print_usage(const char *program)
 {
@@ -272,6 +279,48 @@ static int store_worker_response(ScannerRadioWorkerResult *worker_result, const 
     return 1;
 }
 
+static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
+                                   size_t fft_size, ScannerAnalysisWorker *analysis_worker, int16_t *noise_floor_cdbfs,
+                                   ScannerAnalysisResult *analysis_result)
+{
+    uint8_t iq[SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * 4u];
+    uint8_t radio_format;
+    uint8_t dsp_format;
+    size_t iq_size = 0;
+    uint32_t sample_rate_hz = 0;
+    const ScannerRadioFrontend *frontend;
+    char analysis_error[160];
+    if (analysis_worker == NULL || noise_floor_cdbfs == NULL
+        || !scanner_radio_capture_iq(inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format,
+                                     SCANNER_CAPTURE_TIMEOUT_MS))
+        return 0;
+    frontend = scanner_radio_active(inventory);
+    if (frontend == NULL || scanner_radio_get_sample_rate(inventory, channel, &sample_rate_hz) != 1)
+        return 0;
+    if (radio_format == SCANNER_RADIO_IQ_FORMAT_S8)
+        dsp_format = SCANNER_DSP_IQ_FORMAT_S8;
+    else if (radio_format == SCANNER_RADIO_IQ_FORMAT_S16)
+        dsp_format = SCANNER_DSP_IQ_FORMAT_S16_Q11;
+    else
+        return 0;
+
+    /* Send an owned bounded copy to analysis; radio handles stay in the radio worker. */
+    if (!scanner_analysis_worker_analyze(analysis_worker, iq, iq_size, complex_pairs, dsp_format, sample_rate_hz,
+                                         fft_size, 8.0, 2, analysis_result, analysis_error, sizeof(analysis_error)))
+    {
+        fprintf(stderr, "DSP analysis failed: %s\n", analysis_error);
+        return 0;
+    }
+
+    /* Keep the legacy server field in window-power dBFS; PSD floor is analysis metadata. */
+    *noise_floor_cdbfs = analysis_result->mean_window_power_cdbfs;
+    printf("DSP class=%s confidence=%.2f peak-offset=%+.0f Hz occupied-BW=%.0f Hz PSD-floor=%.2f dBFS/Hz\n",
+           scanner_signal_class_name(analysis_result->classification.signal_class),
+           analysis_result->classification.confidence, analysis_result->features.peak_offset_hz,
+           analysis_result->features.occupied_bandwidth_hz, analysis_result->features.noise_floor_dbfs_per_hz);
+    return 1;
+}
+
 static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
                                 const ScannerDatagram *datagram, ScannerRadioWorkerResult *worker_result, void *context)
 {
@@ -289,7 +338,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
     ScannerSweepRequest sweep_request;
     ScannerRawIqRequest raw_iq_request;
     const ScannerRadioFrontend *active_frontend;
-    (void)context;
+    ScannerAppContext *app = (ScannerAppContext *)context;
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {
@@ -515,6 +564,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         int16_t noise_floor_cdbfs = 0;
+        ScannerAnalysisResult analysis_result;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -522,8 +572,8 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!scanner_radio_measure_noise_floor(inventory, get_value_request.channel, 1024, &noise_floor_cdbfs,
-                                                    SCANNER_CAPTURE_TIMEOUT_MS))
+        else if (!analyze_captured_window(inventory, get_value_request.channel, 1024, 512, app->analysis_worker,
+                                          &noise_floor_cdbfs, &analysis_result))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
                                                       SCANNER_MEASURE_CURRENT_COMMAND, status,
@@ -538,6 +588,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t actual_hz = 0;
         int16_t noise_floor_cdbfs = 0;
+        ScannerAnalysisResult analysis_result;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -548,8 +599,8 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
         else if (!scanner_radio_set_frequency(inventory, measure_frequency_request.channel,
                                               (uint64_t)measure_frequency_request.frequency_khz * 1000u, &actual_hz))
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
-        else if (!scanner_radio_measure_noise_floor(inventory, measure_frequency_request.channel, 1024,
-                                                    &noise_floor_cdbfs, SCANNER_CAPTURE_TIMEOUT_MS))
+        else if (!analyze_captured_window(inventory, measure_frequency_request.channel, 1024, 512, app->analysis_worker,
+                                          &noise_floor_cdbfs, &analysis_result))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
                                                       SCANNER_MEASURE_FREQUENCY_COMMAND, status,
@@ -568,6 +619,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t point_count;
         uint64_t current_khz;
+        ScannerAnalysisResult analysis_result;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -599,8 +651,8 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
                 }
                 frequencies[count] = (uint32_t)current_khz;
                 if (!scanner_radio_set_frequency(inventory, sweep_request.channel, current_khz * 1000u, &actual_hz)
-                    || !scanner_radio_measure_noise_floor(inventory, sweep_request.channel, 256,
-                                                          &noise_floors_cdbfs[count], SCANNER_CAPTURE_TIMEOUT_MS))
+                    || !analyze_captured_window(inventory, sweep_request.channel, 4096, 1024, app->analysis_worker,
+                                                &noise_floors_cdbfs[count], &analysis_result))
                 {
                     status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
                     count = 0;
@@ -715,6 +767,8 @@ static int run_node(const Options *options)
     ScannerDevice device;
     ScannerRadioInventory radio_inventory;
     ScannerRadioWorker *radio_worker = NULL;
+    ScannerAnalysisWorker *analysis_worker = NULL;
+    ScannerAppContext app_context;
     ScannerUdpSocket socket_handle;
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
@@ -856,7 +910,14 @@ static int run_node(const Options *options)
         goto cleanup;
     }
     printf("Waiting for radio commands; Exit (0x06) closes the session\n");
-    if (!scanner_radio_worker_start(&radio_worker, &radio_inventory, handle_radio_command, (void *)options, error,
+    if (!scanner_analysis_worker_start(&analysis_worker, error, sizeof(error)))
+    {
+        fprintf(stderr, "%s\n", error);
+        result = 0;
+        goto cleanup;
+    }
+    app_context.analysis_worker = analysis_worker;
+    if (!scanner_radio_worker_start(&radio_worker, &radio_inventory, handle_radio_command, &app_context, error,
                                     sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
@@ -878,6 +939,8 @@ cleanup:
         scanner_radio_worker_stop(&radio_worker);
     else
         scanner_radio_close_all(&radio_inventory);
+    if (analysis_worker != NULL)
+        scanner_analysis_worker_stop(&analysis_worker);
     scanner_udp_close(&socket_handle);
     return result == 1;
 }

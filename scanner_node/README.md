@@ -49,13 +49,17 @@ Frequency commands use a zero-based RX channel. `SET_FREQUENCY` accepts whole kH
 
 Selecting the currently active frontend leaves its open handle untouched. Selecting another valid frontend closes the previous device handle before opening the new one. `frontend_id=0xff` is the neutral selection: it closes all open device handles and clears the active ID, responding with status `0` and active ID `0xff`. Exit closes any remaining handles after sending its ACK.
 
-`SET_SAMPLE_RATE` and `SET_BANDWIDTH` use unsigned Hz and report hardware readback where available. Bandwidth must match an advertised explicit option when the frontend provides a list. Gain commands set backend-specific LNA/VGA stages in integer dB; `GET_GAIN` returns the sum in signed centi-dB. `MEASURE_CURRENT` and `MEASURE_FREQUENCY` capture 1024 complex samples and pass the raw buffer to the standalone `scanner_dsp` module. DSP computes mean normalized complex-sample power as `10*log10(mean((I^2+Q^2)/FS^2))`, returned as signed centi-dBFS clamped to `int16`. This is the current noise-floor estimate; it does not distinguish broadband noise from a coherent signal and is not calibrated dBm. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, captures 256 complex samples per point, runs the same DSP estimator for each point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs and bypasses DSP, returning the captured buffer. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
+`SET_SAMPLE_RATE` and `SET_BANDWIDTH` use unsigned Hz and report hardware readback where available. Bandwidth must match an advertised explicit option when the frontend provides a list. Gain commands set backend-specific LNA/VGA stages in integer dB; `GET_GAIN` returns the sum in signed centi-dB. The internal DSP module computes a Hann-windowed complex Welch PSD with 50% overlap, removes per-segment DC, and reports `dBFS/Hz` bins. FFT size is a power of two from 64 through 4096; `MEASURE_*` uses 512 bins on 1024 samples and `SWEEP` uses 1024 bins on 4096 samples. Feature extraction uses median spectral floor, an 8 dB above-floor threshold, contiguous-bin band edges, occupied bandwidth, peak offset, and spectral flatness. Zero-valued spectral bins use a documented `-180 dBFS/Hz` numerical floor; when the median hits that floor, a peak-relative fallback prevents pure-tone FFT zeros from inflating the estimated floor.
+
+For compatibility, the existing `power_cdbfs` server field remains mean normalized window power (`10*log10(mean((I^2+Q^2)/FS^2))`) in signed centi-dBFS, not the Welch median floor. The separate PSD floor and signal bands are currently local analysis results; the server protocol is unchanged. This scalar does not distinguish broadband noise from a coherent signal and is not calibrated dBm. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, runs the same PSD analyzer for each point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs and bypasses DSP, returning the captured buffer unchanged. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
 
 The source catalog did not define the wire fields for these operations, so this implementation fixes them as shown above: a 4-byte little-endian RequestId precedes every radio opcode; settings use Hz; gain stage values use dB; measurements use centi-dBFS; and the new raw-IQ opcode is `0x70`. Unknown or malformed datagrams are ignored. The C# DemoServer does not yet dispatch these opcodes; the Python mock supports the extended set with `--full-radio-commands`.
 
 After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
-The DSP calculations are isolated in `scanner_dsp`; they consume an I/Q byte buffer plus its format and sample count, and do not depend on SDR handles, sockets, or protocol structs. Raw-IQ and processed-result commands currently share the radio worker and result queue, but the DSP API is independent so a later bounded analysis queue can move expensive classification out of the radio worker without changing the estimator contract.
+DSP calculations are isolated in `scanner_dsp`; they consume an I/Q byte buffer plus its format and sample count, and do not depend on SDR handles, sockets, or protocol structs. `scanner_analysis` owns a bounded copy queue and a separate analysis thread; the radio worker submits a captured window and receives its feature/classification result without sharing device handles with DSP. Raw-IQ and processed-result commands remain separate paths: raw data bypasses analysis, while measure/sweep use PSD and the generic classifier. `scanner_classifier` is a plugin-style API whose initial feature rules only label narrowband-tone, multicarrier-like, or wideband-noiselike spectra; ambiguous/unsupported signals remain `UNKNOWN`. These are coarse feature labels, not an exhaustive modulation/protocol recognizer or a trained model.
+
+For a focused real BladeRF band-edge survey, build and run `tools/bladerf_band_capture.c` on the Pi. It refuses Stub/HackRF-only inventory, captures 4096 complex samples per tune at 2 MS/s, steps overlapping 1 MHz tune windows around the requested fundamental and its second/third harmonics, then merges Welch detections into absolute-frequency CSV edges. The default fundamental is 1660 MHz with +/-40 MHz search span. Edges are threshold-based estimates (8 dB above per-window median PSD), with resolution set by the 1024-point FFT and tune step; rerun with a narrower tune step or larger FFT/window to refine them. This diagnostic is local-only and does not change server protocol.
 
 ### Thread Ownership
 
@@ -351,8 +355,8 @@ cd /mnt/scaner-ram/orkestr-scanner/scanner_node
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
   -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
   -Iinclude -I../cJSON \
-  src/main.c src/radio_worker.c src/device_config.c src/protocol.c src/udp_socket.c \
-  src/radio_frontend.c src/dsp.c ../cJSON/cJSON.c \
+  src/main.c src/radio_worker.c src/analysis_worker.c src/device_config.c src/protocol.c src/udp_socket.c \
+  src/radio_frontend.c src/dsp.c src/signal_classifier.c ../cJSON/cJSON.c \
   -lm -lbladeRF -lhackrf -o scanner_node
 
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
@@ -362,9 +366,14 @@ gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
   ../cJSON/cJSON.c -lm -lbladeRF -lhackrf -o scanner_protocol_tests
 ./scanner_protocol_tests ../device.json ./device-roundtrip.json
 
-gcc -std=c99 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/dsp_tests.c src/dsp.c \
-  -lm -o scanner_dsp_tests
+gcc -std=c99 -O2 -Wall -Wextra -Wpedantic -Iinclude \
+  tests/dsp_tests.c src/dsp.c src/signal_classifier.c -lm -o scanner_dsp_tests
 ./scanner_dsp_tests
+
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread -Iinclude \
+  tests/analysis_worker_tests.c src/analysis_worker.c src/dsp.c src/signal_classifier.c \
+  -lm -o scanner_analysis_worker_tests
+./scanner_analysis_worker_tests
 
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
   -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
@@ -379,7 +388,20 @@ gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
 ./scanner_node --help
 ```
 
-Expected: protocol, DSP, and worker tests exit 0; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
+  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -Iinclude \
+  tools/bladerf_band_capture.c src/radio_frontend.c src/dsp.c src/signal_classifier.c \
+  -lm -lbladeRF -lhackrf -o bladerf_band_capture
+
+Expected: protocol, DSP/classifier, analysis-worker, and radio-worker tests exit 0; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
+
+After a receive-only capture is safe for the connected antenna/bench, run the focused BladeRF survey:
+
+```bash
+./bladerf_band_capture ./av1660_harmonics.csv 1660 40 1000
+```
+
+Arguments are output CSV, fundamental MHz, half-span MHz, and tune step kHz. The default examines 1620-1700 MHz, 3280-3360 MHz, and 4940-5020 MHz. Do not treat the generic classifier label as proof of an AV protocol; inspect the PSD/edge rows and compare against the known transmitter setup.
 
 ### 4. Verify Pi To Windows Mock Across The LAN
 

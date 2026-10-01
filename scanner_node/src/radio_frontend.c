@@ -937,7 +937,7 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
     size_t bytes_per_pair;
     size_t required_size;
     if (frontend == NULL || output == NULL || output_size == NULL || sample_format == NULL || complex_pairs == 0
-        || complex_pairs > SCANNER_RADIO_MAX_IQ_PAIRS || timeout_ms == 0 || !frontend->frequency_configured
+        || complex_pairs > SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS || timeout_ms == 0 || !frontend->frequency_configured
         || !frontend->sample_rate_configured || !frontend->bandwidth_configured)
         return 0;
 
@@ -1086,7 +1086,7 @@ int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t 
     uint8_t dsp_format;
     size_t size = 0;
     int result;
-    if (noise_floor_cdbfs == NULL || complex_pairs == 0 || complex_pairs > SCANNER_RADIO_MAX_IQ_PAIRS)
+    if (noise_floor_cdbfs == NULL || complex_pairs == 0 || complex_pairs > SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS)
         return 0;
     iq = (uint8_t *)malloc((size_t)complex_pairs * 4u);
     if (iq == NULL)
