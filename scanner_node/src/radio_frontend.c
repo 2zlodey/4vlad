@@ -20,19 +20,64 @@
 
 #ifdef SCANNER_HAVE_HACKRF
 #include <libhackrf/hackrf.h>
+#ifndef _WIN32
+#include <pthread.h>
+#endif
 #endif
 
 #define SCANNER_COMMON_FREQUENCY_MIN_HZ UINT64_C(70000000)
 #define SCANNER_COMMON_FREQUENCY_MAX_HZ UINT64_C(6000000000)
 
+#ifdef SCANNER_HAVE_HACKRF
 typedef struct
 {
     uint8_t *output;
     size_t capacity;
     size_t bytes_written;
+#ifdef _WIN32
+    CRITICAL_SECTION mutex;
+#else
+    pthread_mutex_t mutex;
+#endif
 } HackrfCaptureContext;
 
-#ifdef SCANNER_HAVE_HACKRF
+static void hackrf_context_lock(HackrfCaptureContext *context)
+{
+#ifdef _WIN32
+    EnterCriticalSection(&context->mutex);
+#else
+    (void)pthread_mutex_lock(&context->mutex);
+#endif
+}
+
+static void hackrf_context_unlock(HackrfCaptureContext *context)
+{
+#ifdef _WIN32
+    LeaveCriticalSection(&context->mutex);
+#else
+    (void)pthread_mutex_unlock(&context->mutex);
+#endif
+}
+
+static int hackrf_context_init(HackrfCaptureContext *context)
+{
+#ifdef _WIN32
+    InitializeCriticalSection(&context->mutex);
+    return 1;
+#else
+    return pthread_mutex_init(&context->mutex, NULL) == 0;
+#endif
+}
+
+static void hackrf_context_destroy(HackrfCaptureContext *context)
+{
+#ifdef _WIN32
+    DeleteCriticalSection(&context->mutex);
+#else
+    (void)pthread_mutex_destroy(&context->mutex);
+#endif
+}
+
 static int hackrf_capture_callback(hackrf_transfer *transfer)
 {
     HackrfCaptureContext *context;
@@ -41,12 +86,14 @@ static int hackrf_capture_callback(hackrf_transfer *transfer)
     if (transfer == NULL || transfer->rx_ctx == NULL || transfer->buffer == NULL || transfer->valid_length < 0)
         return -1;
     context = (HackrfCaptureContext *)transfer->rx_ctx;
+    hackrf_context_lock(context);
     remaining = context->capacity - context->bytes_written;
     copy_size = (size_t)transfer->valid_length;
     if (copy_size > remaining)
         copy_size = remaining;
     memcpy(context->output + context->bytes_written, transfer->buffer, copy_size);
     context->bytes_written += copy_size;
+    hackrf_context_unlock(context);
     return 0;
 }
 #endif
@@ -457,6 +504,13 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
         frontend->device_handle = NULL;
         frontend->configured_frequency_hz = 0;
         frontend->frequency_configured = 0;
+        if (frontend->backend != SCANNER_RADIO_BACKEND_STUB)
+        {
+            frontend->sample_rate_configured = 0;
+            frontend->bandwidth_configured = 0;
+            frontend->lna_gain_configured = 0;
+            frontend->vga_gain_configured = 0;
+        }
     }
 #ifdef SCANNER_HAVE_HACKRF
     if (inventory->hackrf_initialized)
@@ -900,16 +954,28 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
         HackrfCaptureContext context;
         unsigned int waited_ms;
         int stop_result;
+        size_t bytes_written;
         if (channel != 0 || frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S8)
+            return 0;
+        if (!hackrf_context_init(&context))
             return 0;
         context.output = output;
         context.capacity = required_size;
         context.bytes_written = 0;
         if (hackrf_start_rx((hackrf_device *)frontend->device_handle, hackrf_capture_callback, &context)
             != HACKRF_SUCCESS)
-            return 0;
-        for (waited_ms = 0; waited_ms < timeout_ms && context.bytes_written < context.capacity; ++waited_ms)
         {
+            hackrf_context_destroy(&context);
+            return 0;
+        }
+        for (waited_ms = 0; waited_ms < timeout_ms; ++waited_ms)
+        {
+            int capture_complete;
+            hackrf_context_lock(&context);
+            capture_complete = context.bytes_written >= context.capacity;
+            hackrf_context_unlock(&context);
+            if (capture_complete)
+                break;
 #ifdef _WIN32
             Sleep(1);
 #else
@@ -918,14 +984,17 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
                 nanosleep(&delay, NULL);
             }
 #endif
-            if (hackrf_is_streaming((hackrf_device *)frontend->device_handle) != HACKRF_TRUE
-                && context.bytes_written < context.capacity)
+            if (hackrf_is_streaming((hackrf_device *)frontend->device_handle) != HACKRF_TRUE && !capture_complete)
                 break;
         }
         stop_result = hackrf_stop_rx((hackrf_device *)frontend->device_handle);
-        if (context.bytes_written != context.capacity || stop_result != HACKRF_SUCCESS)
+        hackrf_context_lock(&context);
+        bytes_written = context.bytes_written;
+        hackrf_context_unlock(&context);
+        hackrf_context_destroy(&context);
+        if (bytes_written != context.capacity || stop_result != HACKRF_SUCCESS)
             return 0;
-        *output_size = context.bytes_written;
+        *output_size = bytes_written;
         *sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
         return 1;
 #else

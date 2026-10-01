@@ -41,6 +41,7 @@ int main(int argc, char **argv)
     ScannerSetFrequencyRequest set_frequency_request;
     ScannerGetFrequencyRequest get_frequency_request;
     ScannerRadioInventory inventory;
+    ScannerRadioInventory close_inventory;
 #ifdef SCANNER_ENABLE_STUB_SDR
     static const uint8_t expected_stub_iq_cycle[8] = { 0x20, 0x20, 0xe0, 0x20, 0xe0, 0xe0, 0x20, 0xe0 };
     ScannerRadioInventory stub_inventory;
@@ -201,6 +202,26 @@ int main(int argc, char **argv)
     ok &= require_true(scanner_radio_select(&inventory, SCANNER_RADIO_ID_NONE)
                            && scanner_radio_active(&inventory) == NULL,
                        "Neutral frontend selection did not clear the active radio");
+
+    memset(&close_inventory, 0, sizeof(close_inventory));
+    close_inventory.count = 1;
+    close_inventory.active_id = 0;
+    close_inventory.frontends[0].id = 0;
+    close_inventory.frontends[0].backend = SCANNER_RADIO_BACKEND_UNKNOWN;
+    close_inventory.frontends[0].device_handle = &close_inventory.frontends[0];
+    close_inventory.frontends[0].frequency_configured = 1;
+    close_inventory.frontends[0].sample_rate_configured = 1;
+    close_inventory.frontends[0].bandwidth_configured = 1;
+    close_inventory.frontends[0].lna_gain_configured = 1;
+    close_inventory.frontends[0].vga_gain_configured = 1;
+    scanner_radio_close_all(&close_inventory);
+    ok &= require_true(close_inventory.frontends[0].device_handle == NULL
+                           && !close_inventory.frontends[0].frequency_configured
+                           && !close_inventory.frontends[0].sample_rate_configured
+                           && !close_inventory.frontends[0].bandwidth_configured
+                           && !close_inventory.frontends[0].lna_gain_configured
+                           && !close_inventory.frontends[0].vga_gain_configured,
+                       "Closing a radio left cached hardware settings marked configured");
 
 #ifdef SCANNER_ENABLE_STUB_SDR
     memset(&stub_inventory, 0, sizeof(stub_inventory));

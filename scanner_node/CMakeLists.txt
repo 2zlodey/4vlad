@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(orkestr_scanner_node VERSION 0.1.0 LANGUAGES C)
 
+find_package(Threads REQUIRED)
+
 option(SCANNER_ENABLE_STUB_SDR "Provide an in-memory SDR frontend when no physical radio is found" ON)
 
 set(CMAKE_C_STANDARD 99)
@@ -54,10 +56,11 @@ endif()
 
 add_executable(scanner_node
     src/main.c
+    src/radio_worker.c
     src/udp_socket.c
 )
 target_include_directories(scanner_node PRIVATE include)
-target_link_libraries(scanner_node PRIVATE scanner_protocol scanner_radio)
+target_link_libraries(scanner_node PRIVATE scanner_protocol scanner_radio Threads::Threads)
 
 if(WIN32)
     target_link_libraries(scanner_node PRIVATE ws2_32)
@@ -102,4 +105,23 @@ if(BUILD_TESTING)
         target_compile_options(scanner_udp_integration_tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME scanner_udp_integration_tests COMMAND scanner_udp_integration_tests)
+
+    add_executable(scanner_radio_worker_tests
+        tests/radio_worker_tests.c
+        src/radio_worker.c
+    )
+    target_include_directories(scanner_radio_worker_tests PRIVATE include)
+    target_link_libraries(scanner_radio_worker_tests PRIVATE scanner_radio Threads::Threads)
+    if(UNIX)
+        target_compile_definitions(scanner_radio_worker_tests PRIVATE _POSIX_C_SOURCE=200809L)
+    endif()
+    if(WIN32)
+        target_link_libraries(scanner_radio_worker_tests PRIVATE ws2_32)
+    endif()
+    if(MSVC)
+        target_compile_options(scanner_radio_worker_tests PRIVATE /W4)
+    else()
+        target_compile_options(scanner_radio_worker_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME scanner_radio_worker_tests COMMAND scanner_radio_worker_tests)
 endif()

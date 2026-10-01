@@ -11,6 +11,7 @@
 
 #include "device_config.h"
 #include "protocol.h"
+#include "radio_worker.h"
 #include "udp_socket.h"
 
 #include <errno.h>
@@ -259,9 +260,20 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const Options *opti
     return 0;
 }
 
-static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *options,
-                                ScannerRadioInventory *inventory, const ScannerDatagram *datagram, char *error,
-                                size_t error_size)
+static int store_worker_response(ScannerRadioWorkerResult *worker_result, const uint8_t *response, size_t response_size)
+{
+    if (response_size == 0 || response_size > sizeof(worker_result->payload))
+    {
+        snprintf(worker_result->error, sizeof(worker_result->error), "%s", "Could not encode radio command response");
+        return 0;
+    }
+    memcpy(worker_result->payload, response, response_size);
+    worker_result->size = response_size;
+    return 1;
+}
+
+static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
+                                const ScannerDatagram *datagram, ScannerRadioWorkerResult *worker_result, void *context)
 {
     uint8_t response[SCANNER_RADIO_COMMAND_RESPONSE_MAX_SIZE];
     size_t response_size;
@@ -277,6 +289,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
     ScannerSweepRequest sweep_request;
     ScannerRawIqRequest raw_iq_request;
     const ScannerRadioFrontend *active_frontend;
+    (void)context;
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {
@@ -284,11 +297,12 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
                                                                 frontends_request.request_id, inventory);
         if (response_size == 0)
         {
-            snprintf(error, error_size, "Could not encode radio frontend capabilities");
+            snprintf(worker_result->error, sizeof(worker_result->error), "%s",
+                     "Could not encode radio frontend capabilities");
+            worker_result->fatal = 1;
             return 0;
         }
-        if (!scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                              error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         printf("Radio frontend query %" PRIu32 " answered: %lu frontend(s), active=%u\n", frontends_request.request_id,
                (unsigned long)inventory->count, (unsigned int)inventory->active_id);
@@ -301,9 +315,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
                                                                                      : SCANNER_RADIO_STATUS_NOT_FOUND;
         response_size = scanner_encode_set_active_radio_response(response, select_request.request_id, status,
                                                                  inventory->active_id);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         printf("Active radio selection %" PRIu32 ": frontend=%u status=%u\n", select_request.request_id,
                (unsigned int)select_request.frontend_id, (unsigned int)status);
@@ -330,9 +342,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_frequency_response(response, set_frequency_request.request_id,
                                                           SCANNER_SET_FREQUENCY_COMMAND, status,
                                                           set_frequency_request.channel, actual_frequency_hz);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         printf("Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%" PRIu64 " Hz\n",
                set_frequency_request.request_id, (unsigned int)set_frequency_request.channel,
@@ -361,9 +371,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_frequency_response(response, get_frequency_request.request_id,
                                                           SCANNER_GET_FREQUENCY_COMMAND, status,
                                                           get_frequency_request.channel, frequency_hz);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         printf("Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz\n",
                get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
@@ -390,9 +398,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
                                                             SCANNER_SET_SAMPLE_RATE_COMMAND, status,
                                                             set_u32_request.channel, actual_hz);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         printf("Set sample rate id=%" PRIu32 " status=%u applied=%u Hz\n", set_u32_request.request_id,
                (unsigned int)status, (unsigned int)actual_hz);
@@ -422,9 +428,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_u32_setting_response(response, get_value_request.request_id,
                                                             SCANNER_GET_SAMPLE_RATE_COMMAND, status,
                                                             get_value_request.channel, value_hz);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -448,9 +452,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
                                                             SCANNER_SET_BANDWIDTH_COMMAND, status,
                                                             set_u32_request.channel, actual_hz);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -477,9 +479,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
         response_size = scanner_encode_gain_stage_response(response, set_gain_request.request_id, command, status,
                                                            set_gain_request.channel, actual_db);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -506,9 +506,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         }
         response_size = scanner_encode_gain_response(response, get_value_request.request_id, status,
                                                      get_value_request.channel, gain_cdb);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -530,9 +528,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
                                                       SCANNER_MEASURE_CURRENT_COMMAND, status,
                                                       get_value_request.channel, power_cdbfs);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -558,9 +554,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
                                                       SCANNER_MEASURE_FREQUENCY_COMMAND, status,
                                                       measure_frequency_request.channel, power_cdbfs);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -596,6 +590,12 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
             {
                 uint64_t actual_hz = 0;
                 uint32_t rounded_khz;
+                if (scanner_radio_worker_current_cancelled(worker))
+                {
+                    status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+                    count = 0;
+                    break;
+                }
                 frequencies[count] = (uint32_t)current_khz;
                 if (!scanner_radio_set_frequency(inventory, sweep_request.channel, current_khz * 1000u, &actual_hz)
                     || !scanner_radio_measure_power(inventory, sweep_request.channel, 256, &powers[count],
@@ -614,9 +614,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         }
         response_size = scanner_encode_sweep_response(response, sizeof(response), sweep_request.request_id, status,
                                                       sweep_request.channel, count, frequencies, powers);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -643,9 +641,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
                                                                                          : 0,
                                                        status == SCANNER_RADIO_STATUS_OK ? iq : NULL,
                                                        status == SCANNER_RADIO_STATUS_OK ? iq_size : 0);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
@@ -653,10 +649,9 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
     if (scanner_decode_exit_request(datagram->payload, datagram->size, &exit_request))
     {
         response_size = scanner_encode_exit_response(response, exit_request.request_id, SCANNER_RADIO_STATUS_OK);
-        if (response_size == 0
-            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
-                                 error, error_size))
+        if (!store_worker_response(worker_result, response, response_size))
             return 0;
+        worker_result->close_after_send = 1;
         printf("Exit command %" PRIu32 " acknowledged; shutting down\n", exit_request.request_id);
         return 2;
     }
@@ -665,13 +660,30 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
     return 1;
 }
 
-static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Options *options,
-                                   ScannerRadioInventory *inventory, char *error, size_t error_size)
+static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Options *options, ScannerRadioWorker *worker,
+                                   char *error, size_t error_size)
 {
     for (;;)
     {
         ScannerDatagram datagram;
-        int result = scanner_udp_receive(socket_handle, 1000, &datagram, error, error_size);
+        ScannerRadioWorkerResult worker_result;
+        int result;
+        while (scanner_radio_worker_receive(worker, &worker_result))
+        {
+            if (worker_result.fatal)
+            {
+                snprintf(error, error_size, "%s", worker_result.error);
+                return 0;
+            }
+            if (worker_result.size > 0
+                && !scanner_udp_send(socket_handle, options->server_address, options->server_port,
+                                     worker_result.payload, worker_result.size, error, error_size))
+                return 0;
+            if (worker_result.close_after_send)
+                return 1;
+        }
+
+        result = scanner_udp_receive(socket_handle, 20, &datagram, error, error_size);
         if (result < 0)
             return 0;
         if (result == 0)
@@ -683,11 +695,16 @@ static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Option
             fprintf(stderr, "Ignoring radio command from unexpected endpoint %s\n", source);
             continue;
         }
-        result = handle_radio_command(socket_handle, options, inventory, &datagram, error, error_size);
-        if (result == 0)
+        {
+            ScannerExitRequest exit_request;
+            if (scanner_decode_exit_request(datagram.payload, datagram.size, &exit_request))
+                scanner_radio_worker_cancel_for_exit(worker);
+        }
+        if (!scanner_radio_worker_submit(worker, &datagram))
+        {
+            snprintf(error, error_size, "%s", "Radio worker request queue is full or stopping");
             return 0;
-        if (result == 2)
-            return 1;
+        }
     }
 }
 
@@ -695,6 +712,7 @@ static int run_node(const Options *options)
 {
     ScannerDevice device;
     ScannerRadioInventory radio_inventory;
+    ScannerRadioWorker *radio_worker = NULL;
     ScannerUdpSocket socket_handle;
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
@@ -836,7 +854,14 @@ static int run_node(const Options *options)
         goto cleanup;
     }
     printf("Waiting for radio commands; Exit (0x06) closes the session\n");
-    if (!wait_for_radio_commands(&socket_handle, options, &radio_inventory, error, sizeof(error)))
+    if (!scanner_radio_worker_start(&radio_worker, &radio_inventory, handle_radio_command, (void *)options, error,
+                                    sizeof(error)))
+    {
+        fprintf(stderr, "%s\n", error);
+        result = 0;
+        goto cleanup;
+    }
+    if (!wait_for_radio_commands(&socket_handle, options, radio_worker, error, sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         result = 0;
@@ -847,7 +872,10 @@ static int run_node(const Options *options)
     }
 
 cleanup:
-    scanner_radio_close_all(&radio_inventory);
+    if (radio_worker != NULL)
+        scanner_radio_worker_stop(&radio_worker);
+    else
+        scanner_radio_close_all(&radio_inventory);
     scanner_udp_close(&socket_handle);
     return result == 1;
 }

@@ -55,6 +55,10 @@ The source catalog did not define the wire fields for these operations, so this 
 
 After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
+### Thread Ownership
+
+After VER, the UDP/network thread owns the socket, validates the peer endpoint, queues radio requests, and sends all radio responses. A single radio worker owns the mutable radio inventory and device handles; it processes requests serially through bounded request/result queues (8 entries each). This keeps long sweeps and captures out of the socket loop without allowing concurrent access to a radio handle. `EXIT` cancels an active sweep between capture points, discards queued radio work, returns its ACK through the network thread, and then closes the radio worker. Individual hardware captures remain bounded by a 2-second timeout; shutdown can wait for an in-flight backend capture to return.
+
 ### Capability Descriptor
 
 Each descriptor is exactly 128 bytes. Integers are unsigned unless explicitly marked signed; all multibyte fields are little-endian. Offsets below are relative to the start of one descriptor.
