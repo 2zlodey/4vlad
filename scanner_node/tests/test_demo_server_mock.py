@@ -10,8 +10,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from tools.demo_server_mock import (  # noqa: E402
     HANDSHAKE_SIZE,
     MockProtocolError,
+    build_exit_request,
+    build_exit_response,
     build_radio_frontends_request,
     build_radio_frontends_response,
+    build_exit_request,
+    build_exit_response,
     build_set_active_radio_request,
     build_set_active_radio_response,
     build_ver_request,
@@ -84,6 +88,9 @@ class DemoServerMockTests(unittest.TestCase):
             self.assertEqual(len(session), 52)
             self.assertEqual(request, build_ver_request(1))
             client.sendto(build_ver_response(1, "1.0.0.0"), server.getsockname())
+            exit_request, _ = client.recvfrom(1024)
+            self.assertEqual(exit_request, build_exit_request(2))
+            client.sendto(build_exit_response(2), server.getsockname())
         finally:
             worker.join(timeout=3)
             client.close()
@@ -141,6 +148,10 @@ class DemoServerMockTests(unittest.TestCase):
             selection, _ = client.recvfrom(1024)
             self.assertEqual(selection, build_set_active_radio_request(9, 0))
             client.sendto(build_set_active_radio_response(9, 0), server.getsockname())
+
+            exit_request, _ = client.recvfrom(1024)
+            self.assertEqual(exit_request, build_exit_request(10))
+            client.sendto(build_exit_response(10), server.getsockname())
         finally:
             worker.join(timeout=3)
             client.close()
@@ -149,6 +160,7 @@ class DemoServerMockTests(unittest.TestCase):
         self.assertFalse(worker.is_alive(), "mock server thread did not stop")
         self.assertEqual(server_error, [])
         self.assertEqual(server_result[0][2]["frontends"][0]["id"], 0)
+        self.assertTrue(server_result[0][2]["exit_acknowledged"])
 
 
 if __name__ == "__main__":

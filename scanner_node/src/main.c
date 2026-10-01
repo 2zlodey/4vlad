@@ -31,7 +31,6 @@ typedef struct
     unsigned int attempts;
     unsigned int handshake_timeout_ms;
     unsigned int ver_timeout_ms;
-    unsigned int command_timeout_ms;
     int ignore_session_reply_size;
 } Options;
 
@@ -49,7 +48,6 @@ static void print_usage(const char *program)
         "  --attempts N          Handshake attempts (default 5)\n"
         "  --handshake-timeout N Handshake timeout in ms (default 2000)\n"
         "  --ver-timeout N       VER request timeout in ms (default 3000)\n"
-        "  --command-timeout N   Radio command window in ms; 0 waits until stopped (default 0)\n"
         "  --ignore-session-reply-size Accept any-size datagram from the server\n"
         "                          as the session reply (diagnostics only)\n",
         program);
@@ -84,7 +82,6 @@ static int parse_options(int argc, char **argv, Options *options)
     options->attempts = 5;
     options->handshake_timeout_ms = 2000;
     options->ver_timeout_ms = 3000;
-    options->command_timeout_ms = 0;
 
     for (index = 1; index < argc; ++index)
     {
@@ -149,12 +146,10 @@ static int parse_options(int argc, char **argv, Options *options)
             }
         }
         else if (strcmp(argument, "--attempts") == 0 || strcmp(argument, "--handshake-timeout") == 0
-                 || strcmp(argument, "--ver-timeout") == 0 || strcmp(argument, "--command-timeout") == 0)
+                 || strcmp(argument, "--ver-timeout") == 0)
         {
             unsigned long maximum = strcmp(argument, "--attempts") == 0 ? 100 : 60000;
-            if (strcmp(argument, "--command-timeout") == 0 && strcmp(value, "0") == 0)
-                parsed = 0;
-            else if (!parse_unsigned(value, maximum, &parsed))
+            if (!parse_unsigned(value, maximum, &parsed))
             {
                 fprintf(stderr, "Invalid positive integer for %s\n", argument);
                 return 0;
@@ -172,9 +167,7 @@ static int parse_options(int argc, char **argv, Options *options)
                 options->ver_timeout_ms = (unsigned int)parsed;
             }
             else
-            {
-                options->command_timeout_ms = (unsigned int)parsed;
-            }
+                options->ver_timeout_ms = (unsigned int)parsed;
         }
         else
         {
@@ -272,6 +265,7 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
     size_t response_size;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
+    ScannerExitRequest exit_request;
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {
@@ -305,6 +299,17 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         return 1;
     }
 
+    if (scanner_decode_exit_request(datagram->payload, datagram->size, &exit_request))
+    {
+        response_size = scanner_encode_exit_response(response, exit_request.request_id, SCANNER_RADIO_STATUS_OK);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        printf("Exit command %" PRIu32 " acknowledged; shutting down\n", exit_request.request_id);
+        return 2;
+    }
+
     fprintf(stderr, "Ignoring malformed or unsupported radio command\n");
     return 1;
 }
@@ -312,25 +317,14 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
 static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Options *options,
                                    ScannerRadioInventory *inventory, char *error, size_t error_size)
 {
-    uint64_t deadline = options->command_timeout_ms == 0 ? 0 : monotonic_milliseconds() + options->command_timeout_ms;
-    while (deadline == 0 || monotonic_milliseconds() < deadline)
+    for (;;)
     {
-        unsigned int remaining = 1000;
-        if (deadline != 0)
-        {
-            uint64_t now = monotonic_milliseconds();
-            remaining = (unsigned int)(deadline - now);
-        }
         ScannerDatagram datagram;
-        int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
+        int result = scanner_udp_receive(socket_handle, 1000, &datagram, error, error_size);
         if (result < 0)
             return 0;
         if (result == 0)
-        {
-            if (deadline != 0)
-                return 1;
             continue;
-        }
         if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
         {
             char source[64];
@@ -338,10 +332,12 @@ static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Option
             fprintf(stderr, "Ignoring radio command from unexpected endpoint %s\n", source);
             continue;
         }
-        if (!handle_radio_command(socket_handle, options, inventory, &datagram, error, error_size))
+        result = handle_radio_command(socket_handle, options, inventory, &datagram, error, error_size);
+        if (result == 0)
             return 0;
+        if (result == 2)
+            return 1;
     }
-    return 1;
 }
 
 static int run_node(const Options *options)
@@ -488,11 +484,15 @@ static int run_node(const Options *options)
         fprintf(stderr, "Timed out waiting for a valid VER request\n");
         goto cleanup;
     }
-    printf("Waiting up to %u ms for radio commands\n", options->command_timeout_ms);
+    printf("Waiting for radio commands; Exit (0x06) closes the session\n");
     if (!wait_for_radio_commands(&socket_handle, options, &radio_inventory, error, sizeof(error)))
     {
         fprintf(stderr, "%s\n", error);
         result = 0;
+    }
+    else
+    {
+        printf("Exit command completed\n");
     }
 
 cleanup:

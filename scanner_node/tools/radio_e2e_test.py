@@ -51,8 +51,6 @@ def main():
                 "3000",
                 "--ver-timeout",
                 "3000",
-                "--command-timeout",
-                "300",
             ],
             capture_output=True,
             text=True,

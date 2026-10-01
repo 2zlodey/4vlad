@@ -16,6 +16,7 @@ VER_RESPONSE_SIZE = 14
 VER_COMMAND = 0x01
 RADIO_FRONTENDS_COMMAND = 0x04
 SET_ACTIVE_RADIO_COMMAND = 0x05
+EXIT_COMMAND = 0x06
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -153,6 +154,18 @@ def build_set_active_radio_request(request_id, frontend_id):
     return struct.pack("<IBB", request_id, SET_ACTIVE_RADIO_COMMAND, frontend_id)
 
 
+def build_exit_request(request_id):
+    return struct.pack("<IB", request_id, EXIT_COMMAND)
+
+
+def build_exit_response(request_id):
+    return struct.pack("<IBB", request_id, EXIT_COMMAND, RADIO_STATUS_OK)
+
+
+def next_request_id(request_id):
+    return 1 if request_id == 0xFFFFFFFF else request_id + 1
+
+
 def validate_set_active_radio_response(payload, expected_id, expected_frontend_id):
     if len(payload) != 7:
         raise MockProtocolError("active radio response has {} bytes, expected 7".format(len(payload)))
@@ -199,6 +212,14 @@ def build_set_active_radio_response(request_id, frontend_id):
     return struct.pack("<IBBB", request_id, SET_ACTIVE_RADIO_COMMAND, RADIO_STATUS_OK, frontend_id)
 
 
+def validate_exit_response(payload, expected_id):
+    if len(payload) != 6:
+        raise MockProtocolError("Exit response has {} bytes, expected 6".format(len(payload)))
+    request_id, command, status = struct.unpack("<IBB", payload)
+    if request_id != expected_id or command != EXIT_COMMAND or status != RADIO_STATUS_OK:
+        raise MockProtocolError("Exit response id, command, or status mismatch")
+
+
 def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend_id=0):
     sock.settimeout(timeout)
     payload, source = sock.recvfrom(65535)
@@ -223,8 +244,9 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
             continue
         validate_ver_response(response, request_id, version)
         radio_result = None
+        exit_after_id = request_id
         if radio_commands:
-            query_id = 1 if request_id == 0xFFFFFFFF else request_id + 1
+            query_id = next_request_id(request_id)
             sock.sendto(build_radio_frontends_request(query_id), client_endpoint)
             frontend_response, frontend_source = sock.recvfrom(65535)
             if frontend_source != source:
@@ -235,12 +257,22 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
             if frontend_id not in {item["id"] for item in radio_result["frontends"]}:
                 raise MockProtocolError("requested active frontend id is not available")
 
-            select_id = 1 if query_id == 0xFFFFFFFF else query_id + 1
+            select_id = next_request_id(query_id)
             sock.sendto(build_set_active_radio_request(select_id, frontend_id), client_endpoint)
             select_response, select_source = sock.recvfrom(65535)
             if select_source != source:
                 raise MockProtocolError("active radio response came from an unexpected endpoint")
             validate_set_active_radio_response(select_response, select_id, frontend_id)
+            exit_after_id = select_id
+
+        exit_id = next_request_id(exit_after_id)
+        sock.sendto(build_exit_request(exit_id), client_endpoint)
+        exit_response, exit_source = sock.recvfrom(65535)
+        if exit_source != source:
+            raise MockProtocolError("Exit response came from an unexpected endpoint")
+        validate_exit_response(exit_response, exit_id)
+        if radio_result is not None:
+            radio_result["exit_acknowledged"] = True
         return handshake, source, radio_result
 
 

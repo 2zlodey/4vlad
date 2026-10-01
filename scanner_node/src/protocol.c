@@ -91,6 +91,15 @@ int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, S
     return 1;
 }
 
+int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE || bytes[4] != SCANNER_EXIT_COMMAND)
+        return 0;
+
+    request->request_id = read_u32_le(bytes);
+    return 1;
+}
+
 static int encode_radio_frontend(uint8_t *output, const ScannerRadioFrontend *frontend)
 {
     size_t index;
@@ -164,6 +173,16 @@ size_t scanner_encode_set_active_radio_response(uint8_t output[7], uint32_t requ
     output[5] = status;
     output[6] = active_id;
     return 7;
+}
+
+size_t scanner_encode_exit_response(uint8_t output[6], uint32_t request_id, uint8_t status)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_EXIT_COMMAND;
+    output[5] = status;
+    return 6;
 }
 
 int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)

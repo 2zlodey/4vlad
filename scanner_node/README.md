@@ -12,7 +12,7 @@ Portable C99 UDP client that performs the DemoServer handshake, answers VER, and
 6. Wait for a server-initiated 5-byte VER request `[request_id:u32 LE][0x01]`.
 7. Reply with 14 bytes `[request_id:u32 LE][version:10 ASCII bytes, zero padded]`.
 8. Answer `GET_RADIO_FRONTENDS` and `SET_ACTIVE_RADIO` using a vendor-neutral capability record.
-9. Keep listening for subsequent radio commands until stopped; use `--command-timeout` for a finite test window.
+9. Keep listening for radio commands after VER; close normally only after an acknowledged `EXIT` command.
 
 Normally the session reply must be exactly 52 bytes. A temporary diagnostic build supports `--ignore-session-reply-size`: it accepts any datagram size from the configured server endpoint as the session-stage response, logs a warning, and proceeds to wait for VER. This does not decode or validate that packet and must not be treated as a successful handshake; the strict 52-byte check remains enabled by default.
 
@@ -30,8 +30,11 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | --- | --- | --- | --- |
 | `0x04` | `GET_RADIO_FRONTENDS` | 5 bytes: `request_id:u32 LE, opcode:u8` | `8 + count * 128` bytes: `request_id:u32 LE, opcode:u8, status:u8, count:u8, active_id:u8, descriptors[]` |
 | `0x05` | `SET_ACTIVE_RADIO` | 6 bytes: `request_id:u32 LE, opcode:u8, frontend_id:u8` | 7 bytes: `request_id:u32 LE, opcode:u8, status:u8, active_id:u8` |
+| `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
-For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected, `2` means the ID is not present, and `1` is reserved for an invalid request. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; it does not start a stream, tune hardware, or transmit RF. `--command-timeout 0` (default) waits indefinitely after VER; a positive value bounds that wait in milliseconds.
+For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Status `1` is reserved for invalid requests. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; it does not start a stream, tune hardware, or transmit RF.
+
+After a valid VER response, the client remains in its UDP command loop indefinitely. It sends the Exit ACK before closing the socket and returning success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
 ### Capability Descriptor
 
@@ -382,7 +385,7 @@ Successful production-server exchange verified on 2026-09-30 from the remote Ras
 ./scanner_node --server 82.165.20.164 --device-json ../scanner-node-build/device.json
 ```
 
-The scanner sent a 626-byte handshake, accepted the 52-byte session reply, answered VER request `3` with a 14-byte `1.0.0.0` response, and exited successfully. The server logged the device ID `12345`, sent the session reply, issued VER request `3`, accepted the matching response, and reported `Application channel is ready`. It observed the client's public/NAT endpoint as `89.129.2.140:3333`; the configured server destination was `82.165.20.164:2653`. This verifies the strict handshake/session/VER path against the production server. It does not verify RF commands, which are not implemented yet.
+The one-shot client used for this historical test sent a 626-byte handshake, accepted the 52-byte session reply, answered VER request `3` with a 14-byte `1.0.0.0` response, and then exited. The server logged device ID `12345`, accepted VER, and reported `Application channel is ready`. It observed the client's public/NAT endpoint as `89.129.2.140:3333`; the configured server destination was `82.165.20.164:2653`. The current client continues listening after VER and waits for `EXIT` (`0x06`); the C# DemoServer does not yet send this command. This historical log verifies handshake/session/VER only, not radio commands.
 
 If a later run reports `INCOMPATIBLE_VERSION` or times out, verify the server's expected assembly version, IPv4 endpoint, UDP/2653 firewall rules, and that the C# server is listening.
 
@@ -430,7 +433,7 @@ python -m unittest discover -s tests -p test_demo_server_mock.py -v
 
 ## Run
 
-With defaults, run the node directly; the server is `82.165.20.164` and the device JSON is `../scanner-node-build/device.json` relative to the current working directory. After VER it stays in the command loop until stopped:
+With defaults, run the node directly; the server is `82.165.20.164` and the device JSON is `../scanner-node-build/device.json` relative to the current working directory. After VER it stays in the command loop until the server sends `EXIT`:
 
 ```powershell
 ./scanner_node
@@ -442,8 +445,8 @@ Override either default with `--server` or `--device-json`. For example, to use 
 ./scanner_node --server 127.0.0.1 --device-json ../../device.json --save-device-json ./device-copy.json
 ```
 
-Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--software-version`, `--attempts`, `--handshake-timeout`, `--ver-timeout`, and `--command-timeout`. Use `--command-timeout 1000` for a one-second test window.
+Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--software-version`, `--attempts`, `--handshake-timeout`, and `--ver-timeout`.
 
 ## Tests
 
-`scanner_protocol_tests` checks handshake layout, VER fields, radio command encoding, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json` from the deployed project directory to exercise the real binary against the Python mock and attached radio. It verifies discovery and selection only, not RF capture or measurement. The C# DemoServer does not yet dispatch the two experimental radio commands.
+`scanner_protocol_tests` checks handshake layout, VER fields, radio command encoding, Exit ACK, and JSON load/save round trip. `scanner_udp_integration_tests` performs handshake → session reply → server VER request → client VER response over loopback. Run `python tools/radio_e2e_test.py --client ./scanner_node --device-json ../device.json` from the deployed project directory to exercise the real binary against the Python mock and attached radio. The mock sends Exit last so the process terminates cleanly. This verifies discovery and selection only, not RF capture or measurement. The C# DemoServer does not yet dispatch the experimental radio commands.

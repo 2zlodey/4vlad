@@ -25,12 +25,15 @@ int main(int argc, char **argv)
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
     const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
     const uint8_t frontends_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
+    const uint8_t exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
     const uint8_t select_request_bytes[SCANNER_VER_REQUEST_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
     uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
     uint8_t select_response[7];
+    uint8_t exit_response[6];
     ScannerVerRequest request;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
+    ScannerExitRequest exit_request;
     ScannerRadioInventory inventory;
     size_t frontends_response_size;
     char error[256];
@@ -112,6 +115,12 @@ int main(int argc, char **argv)
     ok &= require_true(!scanner_decode_set_active_radio_request(select_request_bytes, sizeof(select_request_bytes) - 1,
                                                                 &select_request),
                        "Short active radio selection was accepted");
+    ok &= require_true(scanner_decode_exit_request(exit_request_bytes, sizeof(exit_request_bytes), &exit_request)
+                           && exit_request.request_id == 11,
+                       "Valid Exit request was rejected or decoded incorrectly");
+    ok &= require_true(!scanner_decode_exit_request(frontends_request_bytes, sizeof(frontends_request_bytes),
+                                                    &exit_request),
+                       "Frontend query was accepted as an Exit request");
     frontends_response_size = scanner_encode_radio_frontends_response(frontends_response, sizeof(frontends_response),
                                                                       UINT32_C(0x12345678), &inventory);
     ok &= require_true(frontends_response_size == 8 + SCANNER_RADIO_CAPABILITY_WIRE_SIZE,
@@ -139,6 +148,10 @@ int main(int argc, char **argv)
                            && select_response[4] == SCANNER_SET_ACTIVE_RADIO_COMMAND
                            && select_response[5] == SCANNER_RADIO_STATUS_OK && select_response[6] == 0,
                        "Active radio response encoding failed");
+    ok &= require_true(scanner_encode_exit_response(exit_response, 11, SCANNER_RADIO_STATUS_OK) == sizeof(exit_response)
+                           && exit_response[0] == 11 && exit_response[4] == SCANNER_EXIT_COMMAND
+                           && exit_response[5] == SCANNER_RADIO_STATUS_OK,
+                       "Exit acknowledgment encoding failed");
     ok &= require_true(scanner_radio_select(&inventory, 0) && scanner_radio_active(&inventory) != NULL,
                        "Available frontend could not be selected");
     ok &= require_true(!scanner_radio_select(&inventory, 1) && scanner_radio_active(&inventory) != NULL,
