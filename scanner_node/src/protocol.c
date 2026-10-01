@@ -219,6 +219,103 @@ size_t scanner_encode_frequency_response(uint8_t output[15], uint32_t request_id
     return 15;
 }
 
+size_t scanner_encode_u32_setting_response(uint8_t output[11], uint32_t request_id, uint8_t command, uint8_t status,
+                                           uint8_t channel, uint32_t value)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = command;
+    output[5] = status;
+    output[6] = channel;
+    write_le(output + 7, value, 4);
+    return 11;
+}
+
+size_t scanner_encode_gain_stage_response(uint8_t output[8], uint32_t request_id, uint8_t command, uint8_t status,
+                                          uint8_t channel, uint8_t gain_db)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = command;
+    output[5] = status;
+    output[6] = channel;
+    output[7] = gain_db;
+    return 8;
+}
+
+size_t scanner_encode_gain_response(uint8_t output[9], uint32_t request_id, uint8_t status, uint8_t channel,
+                                    int16_t gain_cdb)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_GET_GAIN_COMMAND;
+    output[5] = status;
+    output[6] = channel;
+    write_le(output + 7, (uint16_t)gain_cdb, 2);
+    return 9;
+}
+
+size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uint8_t command, uint8_t status,
+                                     uint8_t channel, int16_t power_cdbfs)
+{
+    if (output == NULL || (command != SCANNER_MEASURE_CURRENT_COMMAND && command != SCANNER_MEASURE_FREQUENCY_COMMAND))
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = command;
+    output[5] = status;
+    output[6] = channel;
+    write_le(output + 7, (uint16_t)power_cdbfs, 2);
+    return 9;
+}
+
+size_t scanner_encode_raw_iq_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
+                                      uint8_t channel, uint8_t format, uint16_t complex_pairs, const uint8_t *iq,
+                                      size_t iq_size)
+{
+    size_t required_size;
+    if (output == NULL || complex_pairs > SCANNER_RADIO_MAX_IQ_PAIRS
+        || (status == SCANNER_RADIO_STATUS_OK && iq == NULL))
+        return 0;
+    required_size = SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE + iq_size;
+    if (capacity < required_size)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_GET_RAW_IQ_COMMAND;
+    output[5] = status;
+    output[6] = channel;
+    output[7] = format;
+    write_le(output + 8, complex_pairs, 2);
+    if (iq_size > 0)
+        memcpy(output + SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE, iq, iq_size);
+    return required_size;
+}
+
+size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
+                                     uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
+                                     const int16_t *power_cdbfs)
+{
+    size_t required_size = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + (size_t)count * 6u;
+    size_t index;
+    if (output == NULL || count > SCANNER_MAX_SWEEP_POINTS || capacity < required_size
+        || (count > 0 && (frequency_khz == NULL || power_cdbfs == NULL)))
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_SWEEP_COMMAND;
+    output[5] = status;
+    output[6] = channel;
+    write_le(output + 7, count, 2);
+    for (index = 0; index < count; ++index)
+    {
+        size_t offset = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + index * 6u;
+        write_le(output + offset, frequency_khz[index], 4);
+        write_le(output + offset + 4, (uint16_t)power_cdbfs[index], 2);
+    }
+    return required_size;
+}
+
 int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)
 {
     size_t length;
@@ -241,4 +338,102 @@ int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint3
     write_le(output, request_id, 4);
     memcpy(output + 4, version, length);
     return 1;
+}
+
+static uint16_t read_u16_le(const uint8_t *input) { return (uint16_t)((uint16_t)input[0] | ((uint16_t)input[1] << 8)); }
+
+static int decode_get_value_request(const uint8_t *bytes, size_t size, uint8_t opcode, uint32_t *request_id,
+                                    uint8_t *channel)
+{
+    if (bytes == NULL || request_id == NULL || channel == NULL || size != 6u || bytes[4] != opcode)
+        return 0;
+    *request_id = read_u32_le(bytes);
+    *channel = bytes[5];
+    return 1;
+}
+
+static int decode_set_u32_request(const uint8_t *bytes, size_t size, uint8_t opcode, ScannerSetU32Request *request)
+{
+    if (bytes == NULL || request == NULL || size != 10u || bytes[4] != opcode)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->value = read_u32_le(bytes + 6);
+    return 1;
+}
+
+int scanner_decode_set_sample_rate_request(const uint8_t *bytes, size_t size, ScannerSetU32Request *request)
+{
+    return decode_set_u32_request(bytes, size, SCANNER_SET_SAMPLE_RATE_COMMAND, request);
+}
+
+int scanner_decode_get_sample_rate_request(const uint8_t *bytes, size_t size, ScannerGetValueRequest *request)
+{
+    if (request == NULL)
+        return 0;
+    return decode_get_value_request(bytes, size, SCANNER_GET_SAMPLE_RATE_COMMAND, &request->request_id,
+                                    &request->channel);
+}
+
+int scanner_decode_set_bandwidth_request(const uint8_t *bytes, size_t size, ScannerSetU32Request *request)
+{
+    return decode_set_u32_request(bytes, size, SCANNER_SET_BANDWIDTH_COMMAND, request);
+}
+
+int scanner_decode_set_gain_request(const uint8_t *bytes, size_t size, uint8_t opcode, ScannerSetGainRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 7u
+        || (opcode != SCANNER_SET_LNA_GAIN_COMMAND && opcode != SCANNER_SET_VGA_GAIN_COMMAND) || bytes[4] != opcode)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->gain_db = bytes[6];
+    return 1;
+}
+
+int scanner_decode_get_gain_request(const uint8_t *bytes, size_t size, ScannerGetValueRequest *request)
+{
+    if (request == NULL)
+        return 0;
+    return decode_get_value_request(bytes, size, SCANNER_GET_GAIN_COMMAND, &request->request_id, &request->channel);
+}
+
+int scanner_decode_measure_current_request(const uint8_t *bytes, size_t size, ScannerGetValueRequest *request)
+{
+    if (request == NULL)
+        return 0;
+    return decode_get_value_request(bytes, size, SCANNER_MEASURE_CURRENT_COMMAND, &request->request_id,
+                                    &request->channel);
+}
+
+int scanner_decode_measure_frequency_request(const uint8_t *bytes, size_t size, ScannerMeasureFrequencyRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 10u || bytes[4] != SCANNER_MEASURE_FREQUENCY_COMMAND)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->frequency_khz = read_u32_le(bytes + 6);
+    return 1;
+}
+
+int scanner_decode_sweep_request(const uint8_t *bytes, size_t size, ScannerSweepRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 18u || bytes[4] != SCANNER_SWEEP_COMMAND)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->start_khz = read_u32_le(bytes + 6);
+    request->stop_khz = read_u32_le(bytes + 10);
+    request->step_khz = read_u32_le(bytes + 14);
+    return 1;
+}
+
+int scanner_decode_raw_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 8u || bytes[4] != 0x70u)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->complex_pairs = read_u16_le(bytes + 6);
+    return request->complex_pairs > 0 && request->complex_pairs <= SCANNER_RADIO_MAX_IQ_PAIRS;
 }

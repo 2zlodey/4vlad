@@ -45,6 +45,14 @@ int main(int argc, char **argv)
     ScannerRadioInventory stub_inventory;
     uint64_t actual_frequency_hz;
     uint64_t readback_frequency_hz;
+    uint8_t iq_first[128];
+    uint8_t iq_repeat[128];
+    uint8_t iq_long[256];
+    uint8_t iq_other_frequency[128];
+    uint8_t iq_format;
+    size_t iq_size;
+    int16_t power_first;
+    int16_t power_repeat;
 #endif
     size_t frontends_response_size;
     char error[256];
@@ -200,7 +208,8 @@ int main(int argc, char **argv)
     ok &= require_true(stub_inventory.count == 1 && stub_inventory.frontends[0].rx_channels == 1
                            && stub_inventory.frontends[0].tx_channels == 0
                            && stub_inventory.frontends[0].capabilities
-                                  == (SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TUNE),
+                                  == (SCANNER_RADIO_CAP_RX | SCANNER_RADIO_CAP_TUNE | SCANNER_RADIO_CAP_SAMPLE_RATE
+                                      | SCANNER_RADIO_CAP_BANDWIDTH | SCANNER_RADIO_CAP_GAIN),
                        "Stub SDR advertised unexpected capabilities");
     ok &= require_true(scanner_radio_select(&stub_inventory, 0), "Stub SDR selection failed");
     ok &= require_true(scanner_radio_set_frequency(&stub_inventory, 0, UINT64_C(100000000), &actual_frequency_hz)
@@ -209,6 +218,27 @@ int main(int argc, char **argv)
     ok &= require_true(scanner_radio_get_frequency(&stub_inventory, 0, &readback_frequency_hz)
                            && readback_frequency_hz == UINT64_C(100000000),
                        "Stub SDR frequency readback failed");
+    ok &= require_true(scanner_radio_capture_iq(&stub_inventory, 0, 64, iq_first, sizeof(iq_first), &iq_size,
+                                                &iq_format, 100)
+                           && iq_size == sizeof(iq_first) && iq_format == SCANNER_RADIO_IQ_FORMAT_S8,
+                       "Stub SDR raw IQ capture failed");
+    ok &= require_true(scanner_radio_capture_iq(&stub_inventory, 0, 64, iq_repeat, sizeof(iq_repeat), &iq_size,
+                                                &iq_format, 100)
+                           && memcmp(iq_first, iq_repeat, sizeof(iq_first)) == 0,
+                       "Stub SDR IQ was not deterministic for an identical configuration");
+    ok &= require_true(scanner_radio_measure_power(&stub_inventory, 0, 1024, &power_first, 100)
+                           && scanner_radio_measure_power(&stub_inventory, 0, 1024, &power_repeat, 100)
+                           && power_first == power_repeat,
+                       "Stub SDR power was not deterministic for an identical configuration");
+    ok &= require_true(scanner_radio_capture_iq(&stub_inventory, 0, 128, iq_long, sizeof(iq_long), &iq_size, &iq_format,
+                                                100)
+                           && iq_size == sizeof(iq_long) && memcmp(iq_first, iq_long, sizeof(iq_first)) == 0,
+                       "Stub SDR IQ prefix changed when requesting a longer block for power");
+    ok &= require_true(scanner_radio_set_frequency(&stub_inventory, 0, UINT64_C(101000000), &actual_frequency_hz)
+                           && scanner_radio_capture_iq(&stub_inventory, 0, 64, iq_other_frequency,
+                                                       sizeof(iq_other_frequency), &iq_size, &iq_format, 100)
+                           && memcmp(iq_first, iq_other_frequency, sizeof(iq_first)) != 0,
+                       "Stub SDR IQ did not respond to a frequency change");
     scanner_radio_close_all(&stub_inventory);
     ok &= require_true(scanner_radio_active(&stub_inventory) == NULL, "Stub SDR close-all did not clear selection");
 #endif

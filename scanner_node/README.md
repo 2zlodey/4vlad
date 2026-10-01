@@ -1,6 +1,6 @@
 # Orkestr Scanner Node
 
-Portable C99 UDP client that performs the DemoServer handshake, answers VER, and exposes generic radio frontend capabilities. BladeRF and HackRF support is optional and enabled when their development libraries are available at build time.
+Portable C99 UDP client that performs the DemoServer handshake, answers VER, exposes generic radio frontend capabilities, configures RX, and returns bounded I/Q and power measurements. BladeRF and HackRF support is optional and enabled when their development libraries are available at build time.
 
 ## Network flow
 
@@ -32,15 +32,26 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | `0x05` | `SET_ACTIVE_RADIO` | 6 bytes: `request_id:u32 LE, opcode:u8, frontend_id:u8` | 7 bytes: `request_id:u32 LE, opcode:u8, status:u8, active_id:u8` |
 | `0x64` | `SET_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | 15 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, applied_frequency_hz:u64 LE` |
 | `0x6a` | `GET_FREQUENCY` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 15 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, frequency_hz:u64 LE` |
+| `0x65` | `SET_SAMPLE_RATE` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, sample_rate_hz:u32 LE` | 11 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, applied_hz:u32 LE` |
+| `0x6c` | `GET_SAMPLE_RATE` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | Same 11-byte setting response; status `3` means not configured. |
+| `0x68` | `SET_BANDWIDTH` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, bandwidth_hz:u32 LE` | Same 11-byte setting response. |
+| `0x66`, `0x67` | `SET_LNA_GAIN`, `SET_VGA_GAIN` | 7 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, gain_db:u8` | 8 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, applied_db:u8` |
+| `0x6b` | `GET_GAIN` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 9 bytes: `request_id:u32 LE, opcode:u8, status:u8, RX channel:u8, total_gain_cdb:i16 LE` |
+| `0x6d` | `MEASURE_CURRENT` | 6 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8` | 9 bytes with signed `power_cdbfs:i16 LE`. |
+| `0x02` | `MEASURE_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | Same 9-byte power response; tunes first, then captures. |
+| `0x03` | `SWEEP` | 18 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, start_khz:u32 LE, stop_khz:u32 LE, step_khz:u32 LE` | `9 + count*6` bytes: header `[request_id:u32 LE, opcode, status, channel, count:u16 LE]`, followed by `[frequency_khz:u32 LE, power_cdbfs:i16 LE]` points. |
+| `0x70` | `GET_RAW_IQ` | 8 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, complex_pairs:u16 LE` | 10-byte header `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE]` followed by interleaved I/Q bytes. |
 | `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
-For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Status `1` is reserved for invalid requests. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; it does not start a stream, tune hardware, or transmit RF.
+For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Radio status values are `0` success, `1` invalid, `2` not found, `3` not configured, `4` no active frontend, `5` invalid RX channel, `6` outside range or unsupported discrete value, `7` backend operation failed, `8` operation unsupported, and `9` capture failed. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; selecting it alone does not start a stream or transmit RF.
 
 Frequency commands use a zero-based RX channel. `SET_FREQUENCY` accepts whole kHz and converts to Hz internally; it validates the active frontend's range, tunes RX only, and returns applied frequency in Hz. `GET_FREQUENCY` performs libbladeRF hardware readback on BladeRF. HackRF has no frequency-get API, so it returns the last frequency successfully requested by this process; before the first successful SET it returns status `3` (`NOT_CONFIGURED`). Other statuses are `4` no active/open frontend, `5` invalid RX channel, `6` outside the advertised range, and `7` backend operation failed.
 
 Selecting the currently active frontend leaves its open handle untouched. Selecting another valid frontend closes the previous device handle before opening the new one. `frontend_id=0xff` is the neutral selection: it closes all open device handles and clears the active ID, responding with status `0` and active ID `0xff`. Exit closes any remaining handles after sending its ACK.
 
-Implementation notes from hardware testing: BladeRF provides `get_frequency`, so the response reports its measured/tuned readback. libhackrf exposes `set_freq` but no getter; for HackRF the client can only report the last successful requested frequency, not independently verify the synthesizer's actual output. The command therefore uses integer kHz on input (matching the command catalog's `u32` range) and exact Hz on output (`u64`). A successful software/API response is not an RF calibration measurement. Tests tune both connected frontends to 100 MHz but do not enable RX streaming or TX.
+`SET_SAMPLE_RATE` and `SET_BANDWIDTH` use unsigned Hz and report hardware readback where available. Bandwidth must match an advertised explicit option when the frontend provides a list. Gain commands set backend-specific LNA/VGA stages in integer dB; `GET_GAIN` returns the sum in signed centi-dB. `MEASURE_CURRENT` and `MEASURE_FREQUENCY` average 1024 complex samples; power is `10*log10(mean((I^2+Q^2)/FS^2))` in signed centi-dBFS, clamped to the `int16` range. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, captures 256 complex samples per point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
+
+The source catalog did not define the wire fields for these operations, so this implementation fixes them as shown above: a 4-byte little-endian RequestId precedes every radio opcode; settings use Hz; gain stage values use dB; measurements use centi-dBFS; and the new raw-IQ opcode is `0x70`. Unknown or malformed datagrams are ignored. The C# DemoServer does not yet dispatch these opcodes; the Python mock supports the extended set with `--full-radio-commands`.
 
 After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
@@ -75,9 +86,9 @@ Each descriptor is exactly 128 bytes. Integers are unsigned unless explicitly ma
 | 63 | 1 | `reserved` | Must be zero; ignore on receive. |
 | 64 | 64 | `bandwidth_options[16]` | Up to 16 exact RX bandwidths in Hz. The first `bandwidth_option_count` values are valid; remaining slots are zero. |
 
-The HackRF bandwidth list is `1,750,000; 2,500,000; 3,500,000; 5,000,000; 5,500,000; 6,000,000; 7,000,000; 8,000,000; 9,000,000; 10,000,000; 12,000,000; 14,000,000; 15,000,000; 20,000,000; 24,000,000; 28,000,000 Hz`. BladeRF currently reports its API min/max/step and no explicit list. A zero step is not permission to choose outside the advertised range; the backend must validate and report the actual applied setting when a future configuration command is added.
+The HackRF bandwidth list is `1,750,000; 2,500,000; 3,500,000; 5,000,000; 5,500,000; 6,000,000; 7,000,000; 8,000,000; 9,000,000; 10,000,000; 12,000,000; 14,000,000; 15,000,000; 20,000,000; 24,000,000; 28,000,000 Hz`. BladeRF currently reports its API min/max/step and no explicit list. Setters validate advertised ranges/options and report the applied setting; hardware may quantize a request.
 
-Gain is one backend-neutral nominal RX scale in centi-dB. BladeRF limits come from libbladeRF's overall RX gain range. HackRF's advertised `0..11,300 centi-dB` is nominal combined RX gain (RF amp plus LNA/VGA); the backend must map a requested value to its hardware stages. HackRF RF amp gain varies by frequency, and its discrete stages mean `gain_step_cdb=0`. BladeRF gain limits can also vary with tuning frequency, so the final setter must re-check the range after tuning. `agc_modes` is a capability mask, not current AGC state.
+Gain capability limits are nominal RX scale in centi-dB. The stage-setting wire commands are integer dB and backend-specific: HackRF exposes its discrete LNA/VGA steps; BladeRF maps to libbladeRF's `LNA` and `VGA1` stages. `GET_GAIN` reports total gain, not the per-stage values. `agc_modes` is a capability mask, not current AGC state.
 
 ### Current Backend Profiles
 
@@ -88,7 +99,7 @@ The descriptor reports runtime capabilities, not a hard-coded model ID. Expected
 | bladeRF 2.0 micro | 2 RX, 2 TX, full duplex | libbladeRF range (about `521 kHz..61.44 MHz`) | libbladeRF range (about `200 kHz..56 MHz`); values may be quantized by the device | RX overall-gain range from libbladeRF (typically around `-15..+60 dB`, frequency-dependent); hardware AGC advertised when the API reports it | 12-bit converter, signed 16-bit I/Q container |
 | HackRF One | 1 RX, 1 TX, half duplex | `2..20 MS/s` | exact 16-value list above | nominal RX total gain `0..113 dB`; nonuniform hardware stages; no hardware AGC | 8-bit signed I/Q |
 
-The scanner deliberately reports `70 MHz` as the minimum for both radios even though HackRF One can tune lower and bladeRF TX can tune below its RX floor. This gives the server one common tuning domain. Sample-rate/bandwidth values are RX capabilities; TX tuning uses the same advertised common frequency domain. Zero step means the backend does not expose a uniform step; it does not mean all out-of-range values are accepted. Configuration commands must validate backend-specific values and return the actual applied setting.
+The scanner deliberately reports `70 MHz` as the minimum for both radios even though HackRF One can tune lower and bladeRF TX can tune below its RX floor. This gives the server one common tuning domain. Sample-rate/bandwidth values are RX capabilities; TX tuning uses the same advertised common frequency domain. Zero step means the backend does not expose a uniform step; it does not mean all out-of-range values are accepted.
 
 `sample_resolution_bits` describes converter precision; `iq_sample_format` describes the signed I/Q component container. These are distinct: BladeRF carries 12-bit converter samples in a 16-bit component, while HackRF provides 8-bit components. Vendor/model/serial are deliberately absent from the wire response; IDs are discovery-order IDs and must be queried again after restart or reconnect.
 
@@ -118,7 +129,7 @@ Input/output uses the same schema as the original `device.c`:
 
 The CMake option `SCANNER_ENABLE_STUB_SDR` is enabled by default. If the compiled physical backends find no radio, discovery adds one in-memory `Stub SDR`; when a real HackRF or BladeRF is found, the stub is not added. Disable it with `-DSCANNER_ENABLE_STUB_SDR=OFF` to test the explicit no-radio case.
 
-The stub advertises one 8-bit RX channel and only RX+tune capabilities over the shared `70 MHz..6 GHz` tuning range. Selecting it allocates no hardware handle; `SET_FREQUENCY` stores the requested frequency in process memory and `GET_FREQUENCY` returns that stored value. It does not create I/Q samples, tune a physical device, implement sample-rate/bandwidth/gain control, or transmit RF. It is a control-protocol stand-in for server development, not a signal simulator.
+The stub advertises one 8-bit RX channel with RX, tune, sample-rate, bandwidth, and gain capabilities over the shared `70 MHz..6 GHz` tuning range. It is a deterministic signal simulator, not a control-only placeholder: it stores settings in memory and generates repeatable S8 I/Q from an xorshift32 sequence seeded by tune, sample rate, bandwidth, and gain. The sequence does not depend on requested block length, so shorter captures are prefixes of longer captures. Identical configuration yields identical I/Q and power; changing a seeded setting changes the samples. Power is calculated from the exact same generated I/Q block. The samples are synthetic and do not model RF physics or represent received energy. No stub path transmits RF.
 
 Run the full network plus radio-command round-trip against the Python mock without SDR libraries or hardware:
 
@@ -132,11 +143,11 @@ In another terminal, from the `scanner_node` directory:
 tools/radio_e2e_test.py --client build/scanner_node.exe --device-json ../device.json
 ```
 
-Expected: the scanner reports one `Stub SDR`, the mock completes frontend query, selection, 100 MHz set/get, neutral close and EXIT, and the script prints `E2E PASS`. The mock supplies a test capability response; the E2E script queries the frontend descriptor returned by the client and checks its operations. With optional physical backends compiled and hardware detected, discovery uses the real devices and does not add the stub fallback.
+Expected: the scanner reports one `Stub SDR`; the E2E checks settings/readback, gain, raw I/Q, both power operations, a two-point sweep, neutral close, and EXIT, then prints `E2E PASS`. The mock supplies a test capability response and validates the returned wire layouts. With optional physical backends compiled and hardware detected, discovery uses the real devices and does not add the stub fallback.
 
 ### Optional SDR Discovery Build
 
-The generic frontend inventory works without SDR libraries; by default it falls back to the stub described above. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. `SET_FREQUENCY` and `GET_FREQUENCY` configure/read RX tuning only. Sample-rate/bandwidth/gain configuration, RX streaming/capture, measurements, and TX are not implemented yet.
+The generic frontend inventory works without SDR libraries; by default it falls back to the stub described above. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. RX sample-rate, bandwidth, gain-stage, bounded capture, power, and sweep commands are implemented for the optional real backends. TX remains unsupported and is never enabled by these commands.
 
 Inspect which optional SDR libraries were linked into this build with:
 
@@ -189,7 +200,7 @@ Expected: `hackrf_info` reports the board and firmware; `hackrf_sweep` prints me
 
 ### Remaining Hardware Integration
 
-The HackRF adapter discovers boards, advertises generic capabilities, and supports RX frequency tuning. Keep libhackrf optional. Before adding capture/measurement commands, test bounded RX capture with a known RF source; do not enable TX as part of these tests.
+The HackRF adapter discovers boards, advertises generic capabilities, and supports RX frequency/sample-rate/bandwidth/gain plus bounded S8 capture and power measurements. Keep libhackrf optional. Hardware streaming should still be smoke-tested on the target Pi with the current libhackrf version and a known RF source; do not enable TX as part of these tests.
 
 ## BladeRF Hardware Preparation
 
@@ -249,7 +260,7 @@ Verified on `rpi4` at `10.123.71.141`: both a Nuand bladeRF 2.0 micro (`2cf0:525
 
 `bladeRF-cli --help` documents `-f/--flash-firmware <file>`, `-l/--load-fpga <file>` (volatile load) and `-L/--flash-fpga <file>` (persistent FPGA flash). Use the matching image from `/usr/share/Nuand/bladeRF/` only when the CLI reports that an update/load is required and the exact board variant is known. FPGA flashing is persistent; a wrong image may prevent normal operation. Do not run firmware/FPGA writes as part of routine scanner tests.
 
-The optional libbladeRF backend detects the device, queries its ranges, opens/closes a persistent selected handle, and sets/reads RX frequency. RX capture, streaming, measurement, and TX commands still need implementation. `scanner_node/tools/radio_e2e_test.py` runs the real executable against the Python mock, tests both detected frontends at 100 MHz, exercises handle switching and neutral close-all, and exits via `EXIT` without starting an RF stream.
+The optional libbladeRF backend detects the device, queries its ranges, opens/closes a persistent selected handle, configures RX frequency/sample rate/bandwidth/gain, and captures bounded SC16_Q11 samples for power and raw-IQ commands. `scanner_node/tools/radio_e2e_test.py` runs the real executable against the Python mock and exercises the complete command set; run it against real hardware only when RX streaming is safe for the bench setup. TX is not implemented.
 
 ## Build
 
@@ -272,6 +283,16 @@ ctest --test-dir build -C Release --output-on-failure
 CMake uses Winsock (`ws2_32`) on Windows and POSIX sockets on Linux/macOS.
 `SCANNER_ENABLE_STUB_SDR` defaults to `ON`; build with `-DSCANNER_ENABLE_STUB_SDR=OFF` only when an empty frontend inventory is specifically desired.
 
+## Passwordless SSH To Raspberry Pi
+
+Key-based SSH is configured for `rpi@10.123.71.141` with the dedicated Windows key `%USERPROFILE%\.ssh\rpi_scanner_ed25519`. The private key has no passphrase for unattended deployment; keep it private and do not add it to this repository. To reproduce on another workstation, create an Ed25519 key, press Enter twice at the passphrase prompts if unattended use is required, copy only the `.pub` file to the Pi, and append that one line to `~/.ssh/authorized_keys` with directory/file permissions `700/600`. The first key installation requires the Pi account password; normal login does not.
+
+Verify key-only access with:
+
+```powershell
+ssh -i "$HOME\.ssh\rpi_scanner_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes rpi@10.123.71.141 "id -un; hostname"
+```
+
 ## Manual Deployment And Full Check
 
 Run these steps from the `4vlad` repository root unless a command says otherwise. The Raspberry Pi deployment verified on 2026-09-30 used `rpi@10.123.71.141` and its existing writable tmpfs at `/mnt/scaner-ram` (512 MiB). RAM-disk contents disappear at reboot. Check the current mount and Windows/Pi addresses before reusing the commands; DHCP may change them.
@@ -287,7 +308,7 @@ ctest --test-dir build --output-on-failure
 python -m unittest discover -s tests -p test_demo_server_mock.py -v
 ```
 
-Expected: both CTest cases and all five Python tests pass.
+Expected: both CTest cases and all six Python tests pass.
 
 ### 2. Copy Sources To The Pi RAM Disk
 

@@ -27,7 +27,7 @@ def main():
 
     def serve():
         try:
-            result.append(serve_one(server, "1.0.0.0", 8, 1, True, args.frontend_id))
+            result.append(serve_one(server, "1.0.0.0", 8, 1, True, args.frontend_id, True))
         except Exception as error:
             errors.append(error)
 
@@ -92,8 +92,11 @@ def main():
         raise SystemExit("set/get frequency round-trip failed for one or more frontends")
     if not inventory.get("neutral_closed"):
         raise SystemExit("neutral frontend selection did not close all radio handles")
+    command_checks = inventory.get("commands_by_frontend", {}).get(str(args.frontend_id))
+    if not command_checks or command_checks.get("raw_iq_bytes") != 128 or command_checks.get("sweep_points") != 2:
+        raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")
     print(
-        "E2E PASS: {} frontend(s); selection order starts id={} RX={} TX={} range={}..{} Hz frequency set/get=OK, neutral close=OK IQ={}bit/fmt{} AGC=0x{:02x}".format(
+        "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/sweep=OK, neutral close=OK IQ={}bit/fmt{} AGC=0x{:02x}".format(
             len(inventory["frontends"]),
             args.frontend_id,
             selected["rx_channels"],

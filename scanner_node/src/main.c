@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SCANNER_CAPTURE_TIMEOUT_MS 2000u
+
 typedef struct
 {
     const char *server_address;
@@ -261,13 +263,19 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
                                 ScannerRadioInventory *inventory, const ScannerDatagram *datagram, char *error,
                                 size_t error_size)
 {
-    uint8_t response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
+    uint8_t response[SCANNER_RADIO_COMMAND_RESPONSE_MAX_SIZE];
     size_t response_size;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
     ScannerExitRequest exit_request;
     ScannerSetFrequencyRequest set_frequency_request;
     ScannerGetFrequencyRequest get_frequency_request;
+    ScannerSetU32Request set_u32_request;
+    ScannerGetValueRequest get_value_request;
+    ScannerSetGainRequest set_gain_request;
+    ScannerMeasureFrequencyRequest measure_frequency_request;
+    ScannerSweepRequest sweep_request;
+    ScannerRawIqRequest raw_iq_request;
     const ScannerRadioFrontend *active_frontend;
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
@@ -360,6 +368,285 @@ static int handle_radio_command(ScannerUdpSocket *socket_handle, const Options *
         printf("Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz\n",
                get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
                frequency_hz);
+        return 1;
+    }
+
+    if (scanner_decode_set_sample_rate_request(datagram->payload, datagram->size, &set_u32_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint32_t actual_hz = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (set_u32_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (set_u32_request.value < active_frontend->sample_rate_min_hz
+                 || set_u32_request.value > active_frontend->sample_rate_max_hz)
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_SAMPLE_RATE))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_set_sample_rate(inventory, set_u32_request.channel, set_u32_request.value, &actual_hz))
+            status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
+                                                            SCANNER_SET_SAMPLE_RATE_COMMAND, status,
+                                                            set_u32_request.channel, actual_hz);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        printf("Set sample rate id=%" PRIu32 " status=%u applied=%u Hz\n", set_u32_request.request_id,
+               (unsigned int)status, (unsigned int)actual_hz);
+        return 1;
+    }
+
+    if (scanner_decode_get_sample_rate_request(datagram->payload, datagram->size, &get_value_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint32_t value_hz = 0;
+        int get_result;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (get_value_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_SAMPLE_RATE))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else
+        {
+            get_result = scanner_radio_get_sample_rate(inventory, get_value_request.channel, &value_hz);
+            if (get_result == 0)
+                status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+            else if (get_result < 0)
+                status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
+        }
+        response_size = scanner_encode_u32_setting_response(response, get_value_request.request_id,
+                                                            SCANNER_GET_SAMPLE_RATE_COMMAND, status,
+                                                            get_value_request.channel, value_hz);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_set_bandwidth_request(datagram->payload, datagram->size, &set_u32_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint32_t actual_hz = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (set_u32_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (set_u32_request.value < active_frontend->bandwidth_min_hz
+                 || set_u32_request.value > active_frontend->bandwidth_max_hz)
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_BANDWIDTH))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_set_bandwidth(inventory, set_u32_request.channel, set_u32_request.value, &actual_hz))
+            status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
+                                                            SCANNER_SET_BANDWIDTH_COMMAND, status,
+                                                            set_u32_request.channel, actual_hz);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_set_gain_request(datagram->payload, datagram->size, SCANNER_SET_LNA_GAIN_COMMAND,
+                                        &set_gain_request)
+        || scanner_decode_set_gain_request(datagram->payload, datagram->size, SCANNER_SET_VGA_GAIN_COMMAND,
+                                           &set_gain_request))
+    {
+        uint8_t command = datagram->payload[4];
+        ScannerRadioGainStage stage = command == SCANNER_SET_LNA_GAIN_COMMAND ? SCANNER_RADIO_GAIN_LNA
+                                                                              : SCANNER_RADIO_GAIN_VGA;
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint8_t actual_db = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (set_gain_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_GAIN))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_set_gain_stage(inventory, set_gain_request.channel, stage, set_gain_request.gain_db,
+                                               &actual_db))
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        response_size = scanner_encode_gain_stage_response(response, set_gain_request.request_id, command, status,
+                                                           set_gain_request.channel, actual_db);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_get_gain_request(datagram->payload, datagram->size, &get_value_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        int16_t gain_cdb = 0;
+        int gain_result;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (get_value_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_GAIN))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else
+        {
+            gain_result = scanner_radio_get_total_gain(inventory, get_value_request.channel, &gain_cdb);
+            if (gain_result == 0)
+                status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+            else if (gain_result < 0)
+                status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
+        }
+        response_size = scanner_encode_gain_response(response, get_value_request.request_id, status,
+                                                     get_value_request.channel, gain_cdb);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_measure_current_request(datagram->payload, datagram->size, &get_value_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        int16_t power_cdbfs = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (get_value_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_measure_power(inventory, get_value_request.channel, 1024, &power_cdbfs,
+                                              SCANNER_CAPTURE_TIMEOUT_MS))
+            status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        response_size = scanner_encode_power_response(response, get_value_request.request_id,
+                                                      SCANNER_MEASURE_CURRENT_COMMAND, status,
+                                                      get_value_request.channel, power_cdbfs);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_measure_frequency_request(datagram->payload, datagram->size, &measure_frequency_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint64_t actual_hz = 0;
+        int16_t power_cdbfs = 0;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (measure_frequency_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_set_frequency(inventory, measure_frequency_request.channel,
+                                              (uint64_t)measure_frequency_request.frequency_khz * 1000u, &actual_hz))
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        else if (!scanner_radio_measure_power(inventory, measure_frequency_request.channel, 1024, &power_cdbfs,
+                                              SCANNER_CAPTURE_TIMEOUT_MS))
+            status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
+                                                      SCANNER_MEASURE_FREQUENCY_COMMAND, status,
+                                                      measure_frequency_request.channel, power_cdbfs);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_sweep_request(datagram->payload, datagram->size, &sweep_request))
+    {
+        uint32_t frequencies[SCANNER_MAX_SWEEP_POINTS];
+        int16_t powers[SCANNER_MAX_SWEEP_POINTS];
+        uint16_t count = 0;
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        uint64_t point_count;
+        uint64_t current_khz;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (sweep_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (sweep_request.step_khz == 0 || sweep_request.start_khz > sweep_request.stop_khz
+                 || (uint64_t)sweep_request.start_khz * 1000u < active_frontend->frequency_min_hz
+                 || (uint64_t)sweep_request.stop_khz * 1000u > active_frontend->frequency_max_hz)
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        point_count = status == SCANNER_RADIO_STATUS_OK
+                          ? ((uint64_t)sweep_request.stop_khz - sweep_request.start_khz) / sweep_request.step_khz + 1u
+                          : 0u;
+        if (status == SCANNER_RADIO_STATUS_OK && point_count > SCANNER_MAX_SWEEP_POINTS)
+            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        if (status == SCANNER_RADIO_STATUS_OK && !(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        if (status == SCANNER_RADIO_STATUS_OK)
+        {
+            for (current_khz = sweep_request.start_khz; current_khz <= sweep_request.stop_khz;
+                 current_khz += sweep_request.step_khz)
+            {
+                uint64_t actual_hz = 0;
+                uint32_t rounded_khz;
+                frequencies[count] = (uint32_t)current_khz;
+                if (!scanner_radio_set_frequency(inventory, sweep_request.channel, current_khz * 1000u, &actual_hz)
+                    || !scanner_radio_measure_power(inventory, sweep_request.channel, 256, &powers[count],
+                                                    SCANNER_CAPTURE_TIMEOUT_MS))
+                {
+                    status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+                    count = 0;
+                    break;
+                }
+                rounded_khz = (uint32_t)(actual_hz / 1000u);
+                frequencies[count] = rounded_khz;
+                count++;
+                if (sweep_request.stop_khz - current_khz < sweep_request.step_khz)
+                    break;
+            }
+        }
+        response_size = scanner_encode_sweep_response(response, sizeof(response), sweep_request.request_id, status,
+                                                      sweep_request.channel, count, frequencies, powers);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
+        return 1;
+    }
+
+    if (scanner_decode_raw_iq_request(datagram->payload, datagram->size, &raw_iq_request))
+    {
+        uint8_t iq[SCANNER_MAX_RAW_IQ_PAIRS * 4u];
+        size_t iq_size = 0;
+        uint8_t format = 0;
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (raw_iq_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!scanner_radio_capture_iq(inventory, raw_iq_request.channel, raw_iq_request.complex_pairs, iq,
+                                           sizeof(iq), &iq_size, &format, SCANNER_CAPTURE_TIMEOUT_MS))
+            status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        response_size = scanner_encode_raw_iq_response(response, sizeof(response), raw_iq_request.request_id, status,
+                                                       raw_iq_request.channel, format,
+                                                       status == SCANNER_RADIO_STATUS_OK ? raw_iq_request.complex_pairs
+                                                                                         : 0,
+                                                       status == SCANNER_RADIO_STATUS_OK ? iq : NULL,
+                                                       status == SCANNER_RADIO_STATUS_OK ? iq_size : 0);
+        if (response_size == 0
+            || !scanner_udp_send(socket_handle, options->server_address, options->server_port, response, response_size,
+                                 error, error_size))
+            return 0;
         return 1;
     }
 

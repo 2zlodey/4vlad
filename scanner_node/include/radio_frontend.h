@@ -6,6 +6,7 @@
 
 #define SCANNER_RADIO_MAX_FRONTENDS 8u
 #define SCANNER_RADIO_MAX_BANDWIDTH_OPTIONS 16u
+#define SCANNER_RADIO_MAX_IQ_PAIRS 4096u
 #define SCANNER_RADIO_ID_NONE 0xffu
 
 #define SCANNER_RADIO_CAP_RX 0x00000001u
@@ -60,6 +61,14 @@ typedef struct
     void *device_handle;
     uint64_t configured_frequency_hz;
     uint8_t frequency_configured;
+    uint32_t configured_sample_rate_hz;
+    uint8_t sample_rate_configured;
+    uint32_t configured_bandwidth_hz;
+    uint8_t bandwidth_configured;
+    uint8_t configured_lna_gain_db;
+    uint8_t configured_vga_gain_db;
+    uint8_t lna_gain_configured;
+    uint8_t vga_gain_configured;
     char name[64];
 } ScannerRadioFrontend;
 
@@ -71,6 +80,12 @@ typedef struct
     int hackrf_initialized;
 } ScannerRadioInventory;
 
+typedef enum
+{
+    SCANNER_RADIO_GAIN_LNA = 0,
+    SCANNER_RADIO_GAIN_VGA = 1
+} ScannerRadioGainStage;
+
 void scanner_radio_discover(ScannerRadioInventory *inventory);
 int scanner_radio_add_stub(ScannerRadioInventory *inventory);
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id);
@@ -79,6 +94,20 @@ const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *in
 int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
                                 uint64_t *actual_frequency_hz);
 int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz);
+int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
+                                  uint32_t *actual_hz);
+int scanner_radio_get_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t *sample_rate_hz);
+int scanner_radio_set_bandwidth(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
+                                uint32_t *actual_hz);
+int scanner_radio_get_bandwidth(ScannerRadioInventory *inventory, uint8_t channel, uint32_t *bandwidth_hz);
+int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t channel, ScannerRadioGainStage stage,
+                                 uint8_t requested_db, uint8_t *actual_db);
+int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t channel, int16_t *gain_cdb);
+int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
+                             size_t output_capacity, size_t *output_size, uint8_t *sample_format,
+                             unsigned int timeout_ms);
+int scanner_radio_measure_power(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
+                                int16_t *power_cdbfs, unsigned int timeout_ms);
 const char *scanner_radio_backend_name(ScannerRadioBackend backend);
 
 #endif

@@ -19,6 +19,16 @@ SET_ACTIVE_RADIO_COMMAND = 0x05
 EXIT_COMMAND = 0x06
 SET_FREQUENCY_COMMAND = 0x64
 GET_FREQUENCY_COMMAND = 0x6A
+SET_SAMPLE_RATE_COMMAND = 0x65
+SET_LNA_GAIN_COMMAND = 0x66
+SET_VGA_GAIN_COMMAND = 0x67
+SET_BANDWIDTH_COMMAND = 0x68
+GET_GAIN_COMMAND = 0x6B
+GET_SAMPLE_RATE_COMMAND = 0x6C
+MEASURE_CURRENT_COMMAND = 0x6D
+MEASURE_FREQUENCY_COMMAND = 0x02
+SWEEP_COMMAND = 0x03
+GET_RAW_IQ_COMMAND = 0x70
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -179,6 +189,181 @@ def validate_frequency_response(payload, expected_id, expected_command, expected
         raise MockProtocolError("frequency response status, channel, or readback mismatch")
 
 
+def build_set_u32_request(request_id, command, channel, value):
+    return struct.pack("<IBBI", request_id, command, channel, value)
+
+
+def build_get_value_request(request_id, command, channel):
+    return struct.pack("<IBB", request_id, command, channel)
+
+
+def build_set_gain_request(request_id, command, channel, gain_db):
+    return struct.pack("<IBBB", request_id, command, channel, gain_db)
+
+
+def build_measure_frequency_request(request_id, channel, frequency_khz):
+    return struct.pack("<IBBI", request_id, MEASURE_FREQUENCY_COMMAND, channel, frequency_khz)
+
+
+def build_sweep_request(request_id, channel, start_khz, stop_khz, step_khz):
+    return struct.pack("<IBBIII", request_id, SWEEP_COMMAND, channel, start_khz, stop_khz, step_khz)
+
+
+def build_raw_iq_request(request_id, channel, complex_pairs):
+    return struct.pack("<IBBH", request_id, GET_RAW_IQ_COMMAND, channel, complex_pairs)
+
+
+def validate_setting_response(payload, expected_id, command, channel, value):
+    if len(payload) != 11:
+        raise MockProtocolError("setting response has {} bytes, expected 11".format(len(payload)))
+    actual_id, actual_command, status, actual_channel, actual_value = struct.unpack("<IBBBI", payload)
+    if (actual_id, actual_command, status, actual_channel, actual_value) != (
+        expected_id, command, RADIO_STATUS_OK, channel, value
+    ):
+        raise MockProtocolError("setting response id, command, status, channel, or readback mismatch")
+
+
+def validate_gain_stage_response(payload, expected_id, command, channel, gain_db):
+    if len(payload) != 8:
+        raise MockProtocolError("gain-stage response has {} bytes, expected 8".format(len(payload)))
+    actual_id, actual_command, status, actual_channel, actual_gain = struct.unpack("<IBBBB", payload)
+    if (actual_id, actual_command, status, actual_channel, actual_gain) != (
+        expected_id, command, RADIO_STATUS_OK, channel, gain_db
+    ):
+        raise MockProtocolError("gain-stage response id, command, status, channel, or readback mismatch")
+
+
+def validate_signed_value_response(payload, expected_id, command, channel):
+    if len(payload) != 9:
+        raise MockProtocolError("signed-value response has {} bytes, expected 9".format(len(payload)))
+    actual_id, actual_command, status, actual_channel, value = struct.unpack("<IBBBh", payload)
+    if actual_id != expected_id or actual_command != command or status != RADIO_STATUS_OK or actual_channel != channel:
+        raise MockProtocolError("signed-value response header mismatch")
+    return value
+
+
+def validate_raw_iq_response(payload, expected_id, channel, expected_pairs, expected_format):
+    if len(payload) < 10:
+        raise MockProtocolError("raw-IQ response is shorter than 10 bytes")
+    actual_id, command, status, actual_channel, sample_format, pairs = struct.unpack_from("<IBBBBH", payload)
+    bytes_per_pair = 2 if sample_format == 1 else 4 if sample_format == 2 else 0
+    if (actual_id, command, status, actual_channel, sample_format, pairs) != (
+        expected_id, GET_RAW_IQ_COMMAND, RADIO_STATUS_OK, channel, expected_format, expected_pairs
+    ):
+        raise MockProtocolError("raw-IQ response header mismatch")
+    if len(payload) != 10 + pairs * bytes_per_pair:
+        raise MockProtocolError("raw-IQ payload length does not match format and pair count")
+    return payload[10:]
+
+
+def validate_sweep_response(payload, expected_id, channel, expected_frequencies):
+    if len(payload) < 9:
+        raise MockProtocolError("sweep response is shorter than 9 bytes")
+    actual_id, command, status, actual_channel, count = struct.unpack_from("<IBBBH", payload)
+    if (actual_id, command, status, actual_channel, count) != (
+        expected_id, SWEEP_COMMAND, RADIO_STATUS_OK, channel, len(expected_frequencies)
+    ):
+        raise MockProtocolError("sweep response header mismatch")
+    if len(payload) != 9 + count * 6:
+        raise MockProtocolError("sweep response size does not match point count")
+    points = [struct.unpack_from("<Ih", payload, 9 + index * 6) for index in range(count)]
+    if [point[0] for point in points] != expected_frequencies:
+        raise MockProtocolError("sweep frequencies mismatch")
+    return [point[1] for point in points]
+
+
+def exchange_radio_request(sock, endpoint, request):
+    sock.sendto(request, endpoint)
+    response, source = sock.recvfrom(65535)
+    if source != endpoint:
+        raise MockProtocolError("radio response came from an unexpected endpoint")
+    return response
+
+
+def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz):
+    sample_rate_hz = min(max(frontend["sample_rate_min_hz"], 2000000),
+                         frontend["sample_rate_max_hz"])
+    sample_rate_id = next_request_id(request_id)
+    response = exchange_radio_request(
+        sock, endpoint,
+        build_set_u32_request(sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz),
+    )
+    validate_setting_response(response, sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz)
+    get_sample_rate_id = next_request_id(sample_rate_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_get_value_request(get_sample_rate_id, GET_SAMPLE_RATE_COMMAND, 0)
+    )
+    validate_setting_response(response, get_sample_rate_id, GET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz)
+
+    bandwidth_hz = frontend["bandwidth_options"][0] if frontend["bandwidth_options"] else max(
+        frontend["bandwidth_min_hz"], 1000000
+    )
+    bandwidth_id = next_request_id(get_sample_rate_id)
+    response = exchange_radio_request(
+        sock, endpoint,
+        build_set_u32_request(bandwidth_id, SET_BANDWIDTH_COMMAND, 0, bandwidth_hz),
+    )
+    validate_setting_response(response, bandwidth_id, SET_BANDWIDTH_COMMAND, 0, bandwidth_hz)
+
+    lna_gain_db, vga_gain_db = (16, 20) if frontend["sample_resolution_bits"] == 8 else (6, 10)
+    lna_id = next_request_id(bandwidth_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_set_gain_request(lna_id, SET_LNA_GAIN_COMMAND, 0, lna_gain_db)
+    )
+    validate_gain_stage_response(response, lna_id, SET_LNA_GAIN_COMMAND, 0, lna_gain_db)
+    vga_id = next_request_id(lna_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_set_gain_request(vga_id, SET_VGA_GAIN_COMMAND, 0, vga_gain_db)
+    )
+    validate_gain_stage_response(response, vga_id, SET_VGA_GAIN_COMMAND, 0, vga_gain_db)
+    gain_read_id = next_request_id(vga_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_get_value_request(gain_read_id, GET_GAIN_COMMAND, 0)
+    )
+    validate_signed_value_response(response, gain_read_id, GET_GAIN_COMMAND, 0)
+
+    current_power_id = next_request_id(gain_read_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_get_value_request(current_power_id, MEASURE_CURRENT_COMMAND, 0)
+    )
+    validate_signed_value_response(response, current_power_id, MEASURE_CURRENT_COMMAND, 0)
+
+    raw_iq_id = next_request_id(current_power_id)
+    response = exchange_radio_request(sock, endpoint, build_raw_iq_request(raw_iq_id, 0, 64))
+    raw_iq = validate_raw_iq_response(
+        response, raw_iq_id, 0, 64, frontend["iq_sample_format"]
+    )
+
+    frequency_measure_id = next_request_id(raw_iq_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_measure_frequency_request(frequency_measure_id, 0, frequency_khz)
+    )
+    validate_signed_value_response(response, frequency_measure_id, MEASURE_FREQUENCY_COMMAND, 0)
+
+    sweep_id = next_request_id(frequency_measure_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_sweep_request(sweep_id, 0, frequency_khz,
+                                            frequency_khz + 100, 100)
+    )
+    sweep_powers = validate_sweep_response(
+        response, sweep_id, 0, [frequency_khz, frequency_khz + 100]
+    )
+    restore_id = next_request_id(sweep_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_set_frequency_request(restore_id, 0, frequency_khz)
+    )
+    validate_frequency_response(response, restore_id, SET_FREQUENCY_COMMAND, 0, frequency_khz * 1000)
+    return restore_id, {
+        "sample_rate_hz": sample_rate_hz,
+        "bandwidth_hz": bandwidth_hz,
+        "gain_readback": True,
+        "current_power": True,
+        "raw_iq_bytes": len(raw_iq),
+        "frequency_power": True,
+        "sweep_points": len(sweep_powers),
+    }
+
+
 def build_exit_request(request_id):
     return struct.pack("<IB", request_id, EXIT_COMMAND)
 
@@ -245,7 +430,8 @@ def validate_exit_response(payload, expected_id):
         raise MockProtocolError("Exit response id, command, or status mismatch")
 
 
-def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend_id=0):
+def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend_id=0,
+              full_radio_commands=False):
     sock.settimeout(timeout)
     payload, source = sock.recvfrom(65535)
     handshake = parse_handshake(payload)
@@ -284,9 +470,11 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
 
             frontend_ids = [frontend_id] + [item["id"] for item in radio_result["frontends"]
                                              if item["id"] != frontend_id]
+            frontends_by_id = {item["id"]: item for item in radio_result["frontends"]}
             frequencies_hz = {}
             request_cursor = query_id
             for selected_id in frontend_ids:
+                item = frontends_by_id[selected_id]
                 select_id = next_request_id(request_cursor)
                 sock.sendto(build_set_active_radio_request(select_id, selected_id), client_endpoint)
                 select_response, select_source = sock.recvfrom(65535)
@@ -313,7 +501,15 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                 validate_frequency_response(get_frequency_response, get_frequency_id, GET_FREQUENCY_COMMAND, 0,
                                             frequency_hz)
                 frequencies_hz[str(selected_id)] = frequency_hz
-                same_select_id = next_request_id(get_frequency_id)
+                if full_radio_commands:
+                    restore_id, command_results = exercise_radio_commands(
+                        sock, client_endpoint, get_frequency_id, item, requested_frequency_khz
+                    )
+                    radio_result.setdefault("commands_by_frontend", {})[str(selected_id)] = command_results
+                else:
+                    restore_id = get_frequency_id
+
+                same_select_id = next_request_id(restore_id)
                 sock.sendto(build_set_active_radio_request(same_select_id, selected_id), client_endpoint)
                 same_select_response, same_select_source = sock.recvfrom(65535)
                 if same_select_source != source:
@@ -382,6 +578,11 @@ def parse_args(argv=None):
         help="query generic radio capabilities and select a frontend after VER",
     )
     parser.add_argument(
+        "--full-radio-commands",
+        action="store_true",
+        help="also exercise settings, gain, power, raw-IQ, and sweep commands",
+    )
+    parser.add_argument(
         "--select-frontend-id",
         type=int,
         default=0,
@@ -429,6 +630,7 @@ def main(argv=None):
                         request_id,
                         args.radio_commands,
                         args.select_frontend_id,
+                        args.full_radio_commands,
                     )
                 except socket.timeout:
                     if args.clients == 0:
