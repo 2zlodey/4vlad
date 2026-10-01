@@ -10,7 +10,6 @@
 #include <string.h>
 #include <time.h>
 
-
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -48,7 +47,7 @@ static int hackrf_capture_callback(hackrf_transfer *transfer)
         copy_size = remaining;
     memcpy(context->output + context->bytes_written, transfer->buffer, copy_size);
     context->bytes_written += copy_size;
-    return context->bytes_written >= context->capacity ? -1 : 0;
+    return 0;
 }
 #endif
 
@@ -811,14 +810,40 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
     return 1;
 }
 
-static uint32_t stub_random_next(uint32_t *state)
+typedef struct
 {
-    uint32_t value = *state;
-    value ^= value << 13;
-    value ^= value >> 17;
-    value ^= value << 5;
-    *state = value;
-    return value;
+    uint64_t frequency_hz;
+    int16_t power_cdbfs;
+} StubSpectrumPoint;
+
+static int16_t stub_target_power_cdbfs(uint64_t frequency_hz)
+{
+    static const StubSpectrumPoint profile[] = {
+        { UINT64_C(100000000), -1200 },  { UINT64_C(300000000), -2200 },  { UINT64_C(450000000), -900 },
+        { UINT64_C(650000000), -2000 },  { UINT64_C(900000000), -1000 },  { UINT64_C(1200000000), -2100 },
+        { UINT64_C(1450000000), -1600 }, { UINT64_C(1600000000), -800 },  { UINT64_C(1850000000), -1000 },
+        { UINT64_C(2100000000), -2200 }, { UINT64_C(2360000000), -700 },  { UINT64_C(2600000000), -1900 },
+        { UINT64_C(2800000000), -1000 }, { UINT64_C(3100000000), -2200 }, { UINT64_C(3500000000), -900 },
+        { UINT64_C(3900000000), -1800 }, { UINT64_C(4300000000), -1200 }, { UINT64_C(4700000000), -2100 },
+        { UINT64_C(5100000000), -800 },  { UINT64_C(5500000000), -1900 }, { UINT64_C(5800000000), -700 },
+        { UINT64_C(6000000000), -1600 }
+    };
+    size_t index;
+    if (frequency_hz <= profile[0].frequency_hz)
+        return profile[0].power_cdbfs;
+    for (index = 1; index < sizeof(profile) / sizeof(profile[0]); ++index)
+    {
+        if (frequency_hz <= profile[index].frequency_hz)
+        {
+            uint64_t left_hz = profile[index - 1].frequency_hz;
+            uint64_t span_hz = profile[index].frequency_hz - left_hz;
+            int32_t power_delta = (int32_t)profile[index].power_cdbfs - profile[index - 1].power_cdbfs;
+            int64_t interpolated = (int64_t)profile[index - 1].power_cdbfs
+                                   + (int64_t)power_delta * (int64_t)(frequency_hz - left_hz) / (int64_t)span_hz;
+            return (int16_t)interpolated;
+        }
+    }
+    return profile[sizeof(profile) / sizeof(profile[0]) - 1].power_cdbfs;
 }
 
 static int capture_stub_iq(ScannerRadioFrontend *frontend, uint16_t complex_pairs, uint8_t *output,
@@ -826,19 +851,23 @@ static int capture_stub_iq(ScannerRadioFrontend *frontend, uint16_t complex_pair
 {
     size_t index;
     size_t required_size = (size_t)complex_pairs * 2u;
-    uint32_t state;
+    static const int8_t fixed_iq_cycle[] = { 1, 1, -1, 1, -1, -1, 1, -1 };
+    int16_t target_power_cdbfs;
+    long double target_dbfs;
+    long double base_dbfs;
+    long double amplitude_scale;
+    int64_t amplitude;
     if (output_capacity < required_size || !frontend->frequency_configured || !frontend->sample_rate_configured
         || !frontend->bandwidth_configured || !frontend->lna_gain_configured || !frontend->vga_gain_configured)
         return 0;
 
-    state = UINT32_C(0x6d2b79f5) ^ (uint32_t)frontend->configured_frequency_hz
-            ^ (uint32_t)(frontend->configured_frequency_hz >> 32) ^ frontend->configured_sample_rate_hz
-            ^ frontend->configured_bandwidth_hz ^ ((uint32_t)frontend->configured_lna_gain_db << 8)
-            ^ ((uint32_t)frontend->configured_vga_gain_db << 16);
-    if (state == 0)
-        state = 1;
+    target_power_cdbfs = stub_target_power_cdbfs(frontend->configured_frequency_hz);
+    target_dbfs = (long double)target_power_cdbfs / 100.0L;
+    base_dbfs = 20.0L * log10l(74.0L / 128.0L);
+    amplitude_scale = powl(10.0L, (target_dbfs - base_dbfs) / 20.0L);
+    amplitude = llroundl(74.0L * amplitude_scale);
     for (index = 0; index < required_size; ++index)
-        output[index] = (uint8_t)(stub_random_next(&state) >> 24);
+        output[index] = (uint8_t)(int8_t)(fixed_iq_cycle[index % sizeof(fixed_iq_cycle)] * amplitude);
     *output_size = required_size;
     *sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
     return 1;
@@ -919,7 +948,7 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
             return 0;
         layout = channel_count > 1 ? BLADERF_RX_X2 : BLADERF_RX_X1;
         raw_sample_count = complex_pairs;
-        raw_bytes = raw_sample_count * 2u * sizeof(int16_t);
+        raw_bytes = raw_sample_count * channel_count * 2u * sizeof(int16_t);
         raw = (int16_t *)malloc(raw_bytes);
         if (raw == NULL)
             return 0;
