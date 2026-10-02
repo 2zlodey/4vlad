@@ -261,6 +261,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                                               : SCANNER_RADIO_GAIN_VGA;
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint8_t actual_db = 0;
+        int gain_result = 1;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -268,9 +269,15 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_GAIN))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!scanner_radio_set_gain_stage(inventory, set_gain_request.channel, stage, set_gain_request.gain_db,
-                                               &actual_db))
-            status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        else
+        {
+            gain_result = scanner_radio_set_gain_stage(inventory, set_gain_request.channel, stage,
+                                                       set_gain_request.gain_db, &actual_db);
+            if (gain_result < 0)
+                status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+            else if (gain_result == 0)
+                status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+        }
         response_size = scanner_encode_gain_stage_response(response, set_gain_request.request_id, command, status,
                                                            set_gain_request.channel, actual_db);
         if (!store_worker_response(worker_result, response, response_size))

@@ -169,7 +169,7 @@ Expected: the scanner reports one `Stub SDR`; the E2E checks settings/readback, 
 
 ### Optional SDR Discovery Build
 
-The generic frontend inventory works without SDR libraries; by default it falls back to the stub described above. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. RX sample-rate, bandwidth, gain-stage, bounded capture, power, and sweep commands are implemented for the optional real backends. TX remains unsupported and is never enabled by these commands.
+The generic frontend inventory works without SDR libraries; by default it falls back to the stub described above. CMake automatically enables BladeRF and/or HackRF support when their headers and libraries are found. Discovery opens each available backend briefly to query hardware capabilities, then closes it. Selecting a frontend opens and retains its handle; switching or neutral selection closes it. RX sample-rate, bandwidth, bounded capture, power, and sweep commands are implemented for the optional real backends. Separate LNA/VGA gain-stage commands are supported when the hardware exposes those stages (HackRF and BladeRF1); bladeRF 2.0 micro firmware/library combinations exposing only overall gain report these commands as unsupported. TX remains unsupported and is never enabled by these commands.
 
 Inspect which optional SDR libraries were linked into this build with:
 

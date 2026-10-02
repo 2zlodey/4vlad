@@ -768,7 +768,27 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
     else if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
 #ifdef SCANNER_HAVE_BLADERF
-        const char *stage_name = stage == SCANNER_RADIO_GAIN_LNA ? "LNA" : "VGA1";
+        const char *stages[16];
+        const char *requested_stage = stage == SCANNER_RADIO_GAIN_LNA ? "lna" : "rxvga1";
+        const char *stage_name = NULL;
+        int stage_count = bladerf_get_gain_stages((struct bladerf *)frontend->device_handle,
+                                                  BLADERF_CHANNEL_RX(channel), stages,
+                                                  sizeof(stages) / sizeof(stages[0]));
+        int stage_index;
+        if (stage_count < 0)
+            return 0;
+        for (stage_index = 0; stage_index < stage_count && stage_index < (int)(sizeof(stages) / sizeof(stages[0]));
+             ++stage_index)
+        {
+            if (strcmp(stages[stage_index], requested_stage) == 0
+                || (stage == SCANNER_RADIO_GAIN_VGA && strcmp(stages[stage_index], "vga1") == 0))
+            {
+                stage_name = stages[stage_index];
+                break;
+            }
+        }
+        if (stage_name == NULL)
+            return -1;
         if (bladerf_set_gain_stage((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), stage_name,
                                    requested_db)
             != 0)

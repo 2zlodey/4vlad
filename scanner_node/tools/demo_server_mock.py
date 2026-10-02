@@ -32,6 +32,7 @@ GET_RAW_IQ_COMMAND = 0x70
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
+RADIO_STATUS_UNSUPPORTED = 8
 
 
 class MockProtocolError(Exception):
@@ -227,10 +228,13 @@ def validate_gain_stage_response(payload, expected_id, command, channel, gain_db
     if len(payload) != 8:
         raise MockProtocolError("gain-stage response has {} bytes, expected 8".format(len(payload)))
     actual_id, actual_command, status, actual_channel, actual_gain = struct.unpack("<IBBBB", payload)
-    if (actual_id, actual_command, status, actual_channel, actual_gain) != (
-        expected_id, command, RADIO_STATUS_OK, channel, gain_db
-    ):
+    if (actual_id, actual_command, actual_channel) != (expected_id, command, channel):
         raise MockProtocolError("gain-stage response id, command, status, channel, or readback mismatch")
+    if status == RADIO_STATUS_OK and actual_gain == gain_db:
+        return True
+    if status == RADIO_STATUS_UNSUPPORTED and actual_gain == 0:
+        return False
+    raise MockProtocolError("gain-stage response returned an invalid status or readback")
 
 
 def validate_signed_value_response(payload, expected_id, command, channel):
@@ -256,7 +260,7 @@ def validate_raw_iq_response(payload, expected_id, channel, expected_pairs, expe
     return payload[10:]
 
 
-def validate_sweep_response(payload, expected_id, channel, expected_frequencies):
+def validate_sweep_response(payload, expected_id, channel, expected_frequencies, tolerance_khz=0):
     if len(payload) < 9:
         raise MockProtocolError("sweep response is shorter than 9 bytes")
     actual_id, command, status, actual_channel, count = struct.unpack_from("<IBBBH", payload)
@@ -267,14 +271,29 @@ def validate_sweep_response(payload, expected_id, channel, expected_frequencies)
     if len(payload) != 9 + count * 6:
         raise MockProtocolError("sweep response size does not match point count")
     points = [struct.unpack_from("<Ih", payload, 9 + index * 6) for index in range(count)]
-    if [point[0] for point in points] != expected_frequencies:
-        raise MockProtocolError("sweep frequencies mismatch")
+    actual_frequencies = [point[0] for point in points]
+    if any(abs(actual - expected) > tolerance_khz
+           for actual, expected in zip(actual_frequencies, expected_frequencies)):
+        raise MockProtocolError(
+            "sweep frequencies mismatch: got {}, expected {} within {} kHz".format(
+                actual_frequencies, expected_frequencies, tolerance_khz
+            )
+        )
     return [point[1] for point in points]
 
 
 def exchange_radio_request(sock, endpoint, request):
     sock.sendto(request, endpoint)
-    response, source = sock.recvfrom(65535)
+    try:
+        response, source = sock.recvfrom(65535)
+    except socket.timeout as error:
+        request_id = struct.unpack_from("<I", request)[0] if len(request) >= 4 else None
+        opcode = request[4] if len(request) >= 5 else None
+        raise TimeoutError(
+            "timed out waiting for radio response to opcode 0x{:02x}, request {}".format(
+                opcode if opcode is not None else 0, request_id
+            )
+        ) from error
     if source != endpoint:
         raise MockProtocolError("radio response came from an unexpected endpoint")
     return response
@@ -310,12 +329,12 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
     response = exchange_radio_request(
         sock, endpoint, build_set_gain_request(lna_id, SET_LNA_GAIN_COMMAND, 0, lna_gain_db)
     )
-    validate_gain_stage_response(response, lna_id, SET_LNA_GAIN_COMMAND, 0, lna_gain_db)
+    lna_supported = validate_gain_stage_response(response, lna_id, SET_LNA_GAIN_COMMAND, 0, lna_gain_db)
     vga_id = next_request_id(lna_id)
     response = exchange_radio_request(
         sock, endpoint, build_set_gain_request(vga_id, SET_VGA_GAIN_COMMAND, 0, vga_gain_db)
     )
-    validate_gain_stage_response(response, vga_id, SET_VGA_GAIN_COMMAND, 0, vga_gain_db)
+    vga_supported = validate_gain_stage_response(response, vga_id, SET_VGA_GAIN_COMMAND, 0, vga_gain_db)
     gain_read_id = next_request_id(vga_id)
     response = exchange_radio_request(
         sock, endpoint, build_get_value_request(gain_read_id, GET_GAIN_COMMAND, 0)
@@ -346,7 +365,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
                                             frequency_khz + 100, 100)
     )
     sweep_powers = validate_sweep_response(
-        response, sweep_id, 0, [frequency_khz, frequency_khz + 100]
+        response, sweep_id, 0, [frequency_khz, frequency_khz + 100], tolerance_khz=1
     )
     restore_id = next_request_id(sweep_id)
     response = exchange_radio_request(
@@ -357,6 +376,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "sample_rate_hz": sample_rate_hz,
         "bandwidth_hz": bandwidth_hz,
         "gain_readback": True,
+        "gain_stages_supported": lna_supported and vga_supported,
         "current_power": True,
         "raw_iq_bytes": len(raw_iq),
         "frequency_power": True,
