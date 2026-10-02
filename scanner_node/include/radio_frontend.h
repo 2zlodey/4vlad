@@ -71,7 +71,6 @@ typedef struct
     uint8_t lna_gain_configured;
     uint8_t vga_gain_configured;
     void *capture_buffer;
-    size_t capture_buffer_capacity_bytes;
     char name[64];
 } ScannerRadioFrontend;
 

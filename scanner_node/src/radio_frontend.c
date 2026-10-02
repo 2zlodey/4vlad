@@ -354,7 +354,11 @@ void scanner_radio_discover(ScannerRadioInventory *inventory)
         (void)scanner_radio_add_stub(inventory);
 }
 
-static void release_capture_resources(ScannerRadioFrontend *frontend);
+static void release_capture_resources(ScannerRadioFrontend *frontend)
+{
+    free(frontend->capture_buffer);
+    frontend->capture_buffer = NULL;
+}
 
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
 {
@@ -556,11 +560,12 @@ const char *scanner_radio_backend_name(ScannerRadioBackend backend)
     }
 }
 
-int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
-                                uint64_t *actual_frequency_hz)
+static int set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
+                         uint64_t *actual_frequency_hz, int readback)
 {
     ScannerRadioFrontend *frontend;
-    if (inventory == NULL || actual_frequency_hz == NULL)
+    uint64_t frequency_result = frequency_hz;
+    if (inventory == NULL || (readback && actual_frequency_hz == NULL))
         return 0;
     frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
     if (frontend == NULL || frontend->device_handle == NULL || channel >= frontend->rx_channels
@@ -570,12 +575,16 @@ int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channe
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
 #ifdef SCANNER_HAVE_BLADERF
-        bladerf_frequency actual;
         struct bladerf *device = (struct bladerf *)frontend->device_handle;
-        if (bladerf_set_frequency(device, BLADERF_CHANNEL_RX(channel), frequency_hz) != 0
-            || bladerf_get_frequency(device, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+        if (bladerf_set_frequency(device, BLADERF_CHANNEL_RX(channel), frequency_hz) != 0)
             return 0;
-        frontend->configured_frequency_hz = actual;
+        if (readback)
+        {
+            bladerf_frequency actual;
+            if (bladerf_get_frequency(device, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+                return 0;
+            frequency_result = actual;
+        }
 #else
         return 0;
 #endif
@@ -585,47 +594,35 @@ int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channe
 #ifdef SCANNER_HAVE_HACKRF
         if (channel != 0 || hackrf_set_freq((hackrf_device *)frontend->device_handle, frequency_hz) != HACKRF_SUCCESS)
             return 0;
-        frontend->configured_frequency_hz = frequency_hz;
 #else
         return 0;
 #endif
     }
     else if (frontend->backend == SCANNER_RADIO_BACKEND_STUB)
     {
-        frontend->configured_frequency_hz = frequency_hz;
     }
     else
     {
         return 0;
     }
 
+    frontend->configured_frequency_hz = frequency_result;
     frontend->frequency_configured = 1;
-    *actual_frequency_hz = frontend->configured_frequency_hz;
+    if (readback)
+        *actual_frequency_hz = frequency_result;
     return 1;
+}
+
+int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
+                                uint64_t *actual_frequency_hz)
+{
+    return set_frequency(inventory, channel, frequency_hz, actual_frequency_hz, 1);
 }
 
 int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel,
                                             uint64_t frequency_hz)
 {
-    ScannerRadioFrontend *frontend;
-    uint64_t ignored_frequency_hz;
-    if (inventory == NULL)
-        return 0;
-    frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
-    if (frontend == NULL || frontend->backend != SCANNER_RADIO_BACKEND_BLADERF)
-        return scanner_radio_set_frequency(inventory, channel, frequency_hz, &ignored_frequency_hz);
-#ifdef SCANNER_HAVE_BLADERF
-    if (frontend->device_handle == NULL || channel >= frontend->rx_channels
-        || frequency_hz < frontend->frequency_min_hz || frequency_hz > frontend->frequency_max_hz
-        || bladerf_set_frequency((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), frequency_hz)
-               != 0)
-        return 0;
-    frontend->configured_frequency_hz = frequency_hz;
-    frontend->frequency_configured = 1;
-    return 1;
-#else
-    return 0;
-#endif
+    return set_frequency(inventory, channel, frequency_hz, NULL, 0);
 }
 
 int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz)
@@ -669,12 +666,17 @@ static ScannerRadioFrontend *active_frontend_mutable(ScannerRadioInventory *inve
     return frontend;
 }
 
-static void release_capture_resources(ScannerRadioFrontend *frontend)
+#ifdef SCANNER_HAVE_BLADERF
+static int ensure_capture_buffer(ScannerRadioFrontend *frontend)
 {
-    free(frontend->capture_buffer);
-    frontend->capture_buffer = NULL;
-    frontend->capture_buffer_capacity_bytes = 0;
+    size_t capacity;
+    if (frontend->capture_buffer != NULL)
+        return 1;
+    capacity = (size_t)SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * frontend->rx_channels * 2u * sizeof(int16_t);
+    frontend->capture_buffer = malloc(capacity);
+    return frontend->capture_buffer != NULL;
 }
+#endif
 
 int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
                                   uint32_t *actual_hz)
@@ -1044,7 +1046,6 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
 #ifdef SCANNER_HAVE_BLADERF
         unsigned int channel_count = frontend->rx_channels;
         size_t raw_sample_count;
-        size_t raw_bytes;
         size_t pair_index;
         int16_t *raw;
         struct bladerf *device = (struct bladerf *)frontend->device_handle;
@@ -1054,19 +1055,7 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
             return 0;
         layout = channel_count > 1 ? BLADERF_RX_X2 : BLADERF_RX_X1;
         raw_sample_count = complex_pairs;
-        raw_bytes = raw_sample_count * channel_count * 2u * sizeof(int16_t);
-        if (frontend->capture_buffer == NULL)
-        {
-            frontend->capture_buffer_capacity_bytes =
-                (size_t)SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * channel_count * 2u * sizeof(int16_t);
-            frontend->capture_buffer = malloc(frontend->capture_buffer_capacity_bytes);
-            if (frontend->capture_buffer == NULL)
-            {
-                frontend->capture_buffer_capacity_bytes = 0;
-                return 0;
-            }
-        }
-        if (raw_bytes > frontend->capture_buffer_capacity_bytes)
+        if (!ensure_capture_buffer(frontend))
             return 0;
         raw = (int16_t *)frontend->capture_buffer;
         if (bladerf_sync_config(device, layout, BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, timeout_ms) != 0)
@@ -1123,22 +1112,7 @@ int scanner_radio_prepare_capture_buffer(ScannerRadioInventory *inventory, uint8
     if (frontend == NULL || frontend->backend != SCANNER_RADIO_BACKEND_BLADERF)
         return 0;
 #ifdef SCANNER_HAVE_BLADERF
-    {
-        unsigned int channel_count = frontend->rx_channels;
-        if (channel_count == 0 || channel_count > 2)
-            return 0;
-        if (frontend->capture_buffer != NULL)
-            return 1;
-        frontend->capture_buffer_capacity_bytes =
-            (size_t)SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * channel_count * 2u * sizeof(int16_t);
-        frontend->capture_buffer = malloc(frontend->capture_buffer_capacity_bytes);
-        if (frontend->capture_buffer == NULL)
-        {
-            frontend->capture_buffer_capacity_bytes = 0;
-            return 0;
-        }
-        return 1;
-    }
+    return frontend->rx_channels > 0 && frontend->rx_channels <= 2 && ensure_capture_buffer(frontend);
 #else
     return 0;
 #endif
