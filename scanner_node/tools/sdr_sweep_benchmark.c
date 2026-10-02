@@ -66,7 +66,6 @@ static int run_backend_sweep(const BenchBackend *backend, uint32_t start_mhz, ui
     uint32_t actual_sample_rate = 0;
     uint32_t actual_bandwidth = 0;
     uint64_t requested_hz;
-    uint64_t actual_hz = 0;
     uint64_t start_us;
     uint64_t end_us;
     uint32_t points = 0;
@@ -114,6 +113,16 @@ static int run_backend_sweep(const BenchBackend *backend, uint32_t start_mhz, ui
     perf_reset_all();
     perf_scope_begin(&total_scope, total_probe_name, backend->perf_id);
     start_us = perf_hal_now_us();
+    if (backend->backend == SCANNER_RADIO_BACKEND_BLADERF
+        && !scanner_radio_prepare_capture_buffer(&inventory, 0))
+    {
+        perf_scope_fail(&total_scope);
+        perf_scope_end(&total_scope);
+        fprintf(stderr, "Could not prepare BladeRF capture buffer\n");
+        scanner_analysis_worker_stop(&analysis_worker);
+        scanner_radio_close_all(&inventory);
+        return 0;
+    }
     for (requested_hz = (uint64_t)start_mhz * 1000000u;
          requested_hz <= (uint64_t)stop_mhz * 1000000u;
          requested_hz += (uint64_t)step_mhz * 1000000u)
@@ -123,7 +132,7 @@ static int run_backend_sweep(const BenchBackend *backend, uint32_t start_mhz, ui
         uint8_t dsp_format;
         perf_scope_t point_scope;
         perf_scope_begin(&point_scope, point_probe_name, backend->perf_id + 100u);
-        if (!scanner_radio_set_frequency(&inventory, 0, requested_hz, &actual_hz)
+        if (!scanner_radio_set_frequency_no_readback(&inventory, 0, requested_hz)
             || !scanner_radio_capture_iq(&inventory, 0, BENCH_COMPLEX_SAMPLES, iq, sizeof(iq),
                                          &iq_size, &radio_format, 2000))
         {

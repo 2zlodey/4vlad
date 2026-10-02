@@ -70,6 +70,8 @@ typedef struct
     uint8_t configured_vga_gain_db;
     uint8_t lna_gain_configured;
     uint8_t vga_gain_configured;
+    void *capture_buffer;
+    size_t capture_buffer_capacity_bytes;
     char name[64];
 } ScannerRadioFrontend;
 
@@ -94,6 +96,8 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory);
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory);
 int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
                                 uint64_t *actual_frequency_hz);
+int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel,
+                                            uint64_t frequency_hz);
 int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz);
 int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
                                   uint32_t *actual_hz);
@@ -107,6 +111,7 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
 int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
                              size_t output_capacity, size_t *output_size, uint8_t *sample_format,
                              unsigned int timeout_ms);
+int scanner_radio_prepare_capture_buffer(ScannerRadioInventory *inventory, uint8_t channel);
 /* Capture a bounded I/Q window and delegate its noise-floor estimate to scanner_dsp. */
 int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
                                       int16_t *noise_floor_cdbfs, unsigned int timeout_ms);
