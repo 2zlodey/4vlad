@@ -16,7 +16,7 @@ This builds the existing CMake tree, runs CTest, and runs the Python mock-server
 powershell -ExecutionPolicy Bypass -File .\devtools\build_pi_sweep.ps1
 ```
 
-The script copies the current `include`, `src`, `perf_lib`, and `tools` directories plus CMake/build files to a fresh sibling layout on the Pi's RAM disk. It copies `cJSON` separately because the CMake project references it through `../cJSON`, runs `build_pi.sh`, verifies both expected USB IDs, executes the configured sweep, and copies the log into `measurements/`.
+The script creates a unique timestamped staging root on the Pi's RAM disk. It copies all production `include/` and `src/` files, only the four needed host perf files, and the two CMake tool sources plus the IQ recorder/mock dependencies. It also copies CMake/build metadata, `device.json`, and the sibling `cJSON.c/.h` dependency. It deliberately omits `tests/`, Python `__pycache__`, `.git`, the Zynq HAL, format/project metadata, plotters, and unrelated tools. This avoids stale files from older deployments and keeps the uploaded source manifest small. It runs `build_pi.sh`, verifies both expected USB IDs, executes the configured sweep, and copies the log into `measurements/`.
 
 Defaults target `rpi@10.123.71.141`, use `~/.ssh/rpi_scanner_ed25519`, and scan 1000-6000 MHz in 10 MHz steps. Parameters can override the Pi and sweep range:
 

@@ -29,6 +29,7 @@ MEASURE_CURRENT_COMMAND = 0x6D
 MEASURE_FREQUENCY_COMMAND = 0x02
 SWEEP_COMMAND = 0x03
 GET_RAW_IQ_COMMAND = 0x70
+SAVE_IQ_TO_FILE_COMMAND = 0x71
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -214,6 +215,10 @@ def build_raw_iq_request(request_id, channel, complex_pairs):
     return struct.pack("<IBBH", request_id, GET_RAW_IQ_COMMAND, channel, complex_pairs)
 
 
+def build_save_iq_request(request_id, channel, complex_pairs):
+    return struct.pack("<IBBH", request_id, SAVE_IQ_TO_FILE_COMMAND, channel, complex_pairs)
+
+
 def validate_setting_response(payload, expected_id, command, channel, value):
     if len(payload) != 11:
         raise MockProtocolError("setting response has {} bytes, expected 11".format(len(payload)))
@@ -235,6 +240,21 @@ def validate_gain_stage_response(payload, expected_id, command, channel, gain_db
     if status == RADIO_STATUS_UNSUPPORTED and actual_gain == 0:
         return False
     raise MockProtocolError("gain-stage response returned an invalid status or readback")
+
+
+def validate_iq_file_response(payload, expected_id, channel, sample_format, complex_pairs):
+    if len(payload) != 14:
+        raise MockProtocolError("IQ-file response has {} bytes, expected 14".format(len(payload)))
+    request_id, command, status, actual_channel, actual_format, actual_pairs, payload_size = struct.unpack(
+        "<IBBBBHI", payload
+    )
+    expected_payload_size = complex_pairs * (2 if sample_format == 1 else 4)
+    if (request_id, command, status, actual_channel, actual_format, actual_pairs, payload_size) != (
+        expected_id, SAVE_IQ_TO_FILE_COMMAND, RADIO_STATUS_OK, channel, sample_format,
+        complex_pairs, expected_payload_size
+    ):
+        raise MockProtocolError("IQ-file response metadata mismatch")
+    return payload_size
 
 
 def validate_signed_value_response(payload, expected_id, command, channel):
@@ -353,7 +373,12 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         response, raw_iq_id, 0, 64, frontend["iq_sample_format"]
     )
 
-    frequency_measure_id = next_request_id(raw_iq_id)
+    save_iq_id = next_request_id(raw_iq_id)
+    response = exchange_radio_request(sock, endpoint, build_save_iq_request(save_iq_id, 0, 64))
+    saved_iq_bytes = validate_iq_file_response(response, save_iq_id, 0,
+                                               frontend["iq_sample_format"], 64)
+
+    frequency_measure_id = next_request_id(save_iq_id)
     response = exchange_radio_request(
         sock, endpoint, build_measure_frequency_request(frequency_measure_id, 0, frequency_khz)
     )
@@ -379,6 +404,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "gain_stages_supported": lna_supported and vga_supported,
         "current_power": True,
         "raw_iq_bytes": len(raw_iq),
+        "saved_iq_bytes": saved_iq_bytes,
         "frequency_power": True,
         "sweep_points": len(sweep_powers),
     }

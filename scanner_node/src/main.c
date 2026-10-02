@@ -1,5 +1,6 @@
 #include "analysis_worker.h"
 #include "device_config.h"
+#include "iq_recording.h"
 #include "perf_probe.h"
 #include "protocol.h"
 #include "radio_commands.h"
@@ -68,6 +69,7 @@ static int run_node(const ScannerOptions *options)
     ScannerAnalysisWorker *analysis_worker = NULL;
     ScannerRadioCommandContext app_context;
     ScannerUdpSocket socket_handle;
+    FILE *iq_file = NULL;
     char error[256];
     unsigned int attempt;
     int result = 0;
@@ -117,6 +119,12 @@ static int run_node(const ScannerOptions *options)
         goto cleanup;
     }
 
+    if (options->iq_file != NULL && !scanner_iq_recording_open(options->iq_file, &iq_file, error, sizeof(error)))
+    {
+        fprintf(stderr, "IQ recording: %s\n", error);
+        goto cleanup;
+    }
+
     if (!scanner_session_establish(&socket_handle, options, &device, error, sizeof(error)))
     {
         if (error[0] != '\0')
@@ -133,6 +141,7 @@ static int run_node(const ScannerOptions *options)
         goto cleanup;
     }
     app_context.analysis_worker = analysis_worker;
+    app_context.iq_file = iq_file;
     if (!scanner_radio_worker_start(&radio_worker, &radio_inventory, scanner_radio_command_handle, &app_context, error,
                                     sizeof(error)))
     {
@@ -159,6 +168,7 @@ cleanup:
         scanner_analysis_worker_stop(&analysis_worker);
     perf_report_and_reset();
     scanner_udp_close(&socket_handle);
+    scanner_iq_recording_close(&iq_file);
     return result == 1;
 }
 

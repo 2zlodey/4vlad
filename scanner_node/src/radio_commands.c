@@ -1,4 +1,5 @@
 #include "analysis_worker.h"
+#include "iq_recording.h"
 #include "perf_probe.h"
 #include "protocol.h"
 #include "radio_commands.h"
@@ -23,8 +24,29 @@ static int store_worker_response(ScannerRadioWorkerResult *worker_result, const 
     return 1;
 }
 
+static int capture_and_record(ScannerRadioCommandContext *app, ScannerRadioInventory *inventory, uint8_t channel,
+                              uint16_t complex_samples, uint8_t *iq, size_t iq_capacity, size_t *iq_size,
+                              uint8_t *sample_format)
+{
+    const ScannerRadioFrontend *frontend;
+    char error[160];
+    if (!scanner_radio_capture_iq(inventory, channel, complex_samples, iq, iq_capacity, iq_size, sample_format,
+                                  SCANNER_CAPTURE_TIMEOUT_MS))
+        return 0;
+    if (app == NULL || app->iq_file == NULL)
+        return 1;
+    frontend = scanner_radio_active(inventory);
+    if (!scanner_iq_recording_write(app->iq_file, frontend, channel, complex_samples, *sample_format, iq, *iq_size,
+                                    error, sizeof(error)))
+    {
+        fprintf(stderr, "IQ recording failed: %s\n", error);
+        return 0;
+    }
+    return 1;
+}
+
 static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
-                                   size_t fft_size, ScannerAnalysisWorker *analysis_worker, int16_t *noise_floor_cdbfs,
+                                   size_t fft_size, ScannerRadioCommandContext *app, int16_t *noise_floor_cdbfs,
                                    ScannerAnalysisResult *analysis_result)
 {
     uint8_t iq[SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * 4u];
@@ -34,9 +56,8 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
     uint32_t sample_rate_hz = 0;
     const ScannerRadioFrontend *frontend;
     char analysis_error[160];
-    if (analysis_worker == NULL || noise_floor_cdbfs == NULL
-        || !scanner_radio_capture_iq(inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format,
-                                     SCANNER_CAPTURE_TIMEOUT_MS))
+    if (app == NULL || app->analysis_worker == NULL || noise_floor_cdbfs == NULL
+           || !capture_and_record(app, inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format))
         return 0;
     frontend = scanner_radio_active(inventory);
     if (frontend == NULL || scanner_radio_get_sample_rate(inventory, channel, &sample_rate_hz) != 1)
@@ -49,7 +70,7 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
         return 0;
 
     /* Send an owned bounded copy to analysis; radio handles stay in the radio worker. */
-    if (!scanner_analysis_worker_analyze(analysis_worker, iq, iq_size, complex_pairs, dsp_format, sample_rate_hz,
+    if (!scanner_analysis_worker_analyze(app->analysis_worker, iq, iq_size, complex_pairs, dsp_format, sample_rate_hz,
                                          fft_size, 8.0, 2, analysis_result, analysis_error, sizeof(analysis_error)))
     {
         fprintf(stderr, "DSP analysis failed: %s\n", analysis_error);
@@ -324,7 +345,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!analyze_captured_window(inventory, get_value_request.channel, 1024, 512, app->analysis_worker,
+        else if (!analyze_captured_window(inventory, get_value_request.channel, 1024, 512, app,
                                           &noise_floor_cdbfs, &analysis_result))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
@@ -351,7 +372,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         else if (!scanner_radio_set_frequency(inventory, measure_frequency_request.channel,
                                               (uint64_t)measure_frequency_request.frequency_khz * 1000u, &actual_hz))
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
-        else if (!analyze_captured_window(inventory, measure_frequency_request.channel, 1024, 512, app->analysis_worker,
+        else if (!analyze_captured_window(inventory, measure_frequency_request.channel, 1024, 512, app,
                                           &noise_floor_cdbfs, &analysis_result))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
@@ -403,7 +424,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                 }
                 frequencies[count] = (uint32_t)current_khz;
                 if (!scanner_radio_set_frequency(inventory, sweep_request.channel, current_khz * 1000u, &actual_hz)
-                    || !analyze_captured_window(inventory, sweep_request.channel, 4096, 1024, app->analysis_worker,
+                    || !analyze_captured_window(inventory, sweep_request.channel, 4096, 1024, app,
                                                 &noise_floors_cdbfs[count], &analysis_result))
                 {
                     status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
@@ -424,7 +445,40 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         return 1;
     }
 
-    /* Raw-IQ requests bypass DSP and return the captured sample buffer unchanged. */
+    if (scanner_decode_save_iq_request(datagram->payload, datagram->size, &raw_iq_request))
+    {
+        uint8_t iq[SCANNER_MAX_RAW_IQ_PAIRS * 4u];
+        size_t iq_size = 0;
+        uint8_t format = 0;
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        active_frontend = scanner_radio_active(inventory);
+        if (app == NULL || app->iq_file == NULL)
+            status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
+        else if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (raw_iq_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else if (!capture_and_record(app, inventory, raw_iq_request.channel, raw_iq_request.complex_pairs, iq,
+                                     sizeof(iq), &iq_size, &format))
+            status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+
+        response_size = scanner_encode_iq_file_response(response, raw_iq_request.request_id, status,
+                                                        raw_iq_request.channel,
+                                                        status == SCANNER_RADIO_STATUS_OK ? format : 0,
+                                                        status == SCANNER_RADIO_STATUS_OK
+                                                            ? raw_iq_request.complex_pairs : 0,
+                                                        status == SCANNER_RADIO_STATUS_OK ? (uint32_t)iq_size : 0);
+        if (!store_worker_response(worker_result, response, response_size))
+            return 0;
+        if (status == SCANNER_RADIO_STATUS_OK)
+            printf("Saved IQ capture: %u complex samples, %lu bytes\n",
+                   (unsigned int)raw_iq_request.complex_pairs, (unsigned long)iq_size);
+        return 1;
+    }
+
+    /* Raw-IQ requests return the captured bytes and optionally tee the same bytes to the file. */
     if (scanner_decode_raw_iq_request(datagram->payload, datagram->size, &raw_iq_request))
     {
         uint8_t iq[SCANNER_MAX_RAW_IQ_PAIRS * 4u];
@@ -438,8 +492,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!scanner_radio_capture_iq(inventory, raw_iq_request.channel, raw_iq_request.complex_pairs, iq,
-                                           sizeof(iq), &iq_size, &format, SCANNER_CAPTURE_TIMEOUT_MS))
+        else if (!capture_and_record(app, inventory, raw_iq_request.channel, raw_iq_request.complex_pairs, iq,
+                         sizeof(iq), &iq_size, &format))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_raw_iq_response(response, sizeof(response), raw_iq_request.request_id, status,
                                                        raw_iq_request.channel, format,

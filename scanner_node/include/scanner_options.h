@@ -9,6 +9,7 @@ typedef struct
     const char *bind_address;
     const char *device_json;
     const char *save_device_json;
+    const char *iq_file;
     const char *software_version;
     uint16_t server_port;
     uint16_t local_port;

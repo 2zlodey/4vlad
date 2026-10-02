@@ -6,13 +6,14 @@ Portable C99 UDP client that performs the DemoServer handshake, answers VER, exp
 
 1. Load and validate a device description JSON file with exactly 16 antenna entries.
 2. Optionally write the loaded device data back to JSON with `--save-device-json`.
-3. Bind one UDP socket to the configured local IPv4 address and port.
-4. Serialize and send the 626-byte handshake explicitly as little-endian fields; native C struct layout is never sent directly.
-5. Retry the handshake and accept only a 52-byte reply from the configured server endpoint.
-6. Wait for a server-initiated 5-byte VER request `[request_id:u32 LE][0x01]`.
-7. Reply with 14 bytes `[request_id:u32 LE][version:10 ASCII bytes, zero padded]`.
-8. Answer `GET_RADIO_FRONTENDS` and `SET_ACTIVE_RADIO` using a vendor-neutral capability record.
-9. Keep listening for radio commands after VER; close normally only after an acknowledged `EXIT` command.
+3. Optionally open an append-only `SCIQREC1` IQ recording with `--iq-file`.
+4. Bind one UDP socket to the configured local IPv4 address and port.
+5. Serialize and send the 626-byte handshake explicitly as little-endian fields; native C struct layout is never sent directly.
+6. Retry the handshake and accept only a 52-byte reply from the configured server endpoint.
+7. Wait for a server-initiated 5-byte VER request `[request_id:u32 LE][0x01]`.
+8. Reply with 14 bytes `[request_id:u32 LE][version:10 ASCII bytes, zero padded]`.
+9. Answer `GET_RADIO_FRONTENDS` and `SET_ACTIVE_RADIO` using a vendor-neutral capability record.
+10. Keep listening for radio commands after VER; close normally only after an acknowledged `EXIT` command.
 
 Normally the session reply must be exactly 52 bytes. A temporary diagnostic build supports `--ignore-session-reply-size`: it accepts any datagram size from the configured server endpoint as the session-stage response, logs a warning, and proceeds to wait for VER. This does not decode or validate that packet and must not be treated as a successful handshake; the strict 52-byte check remains enabled by default.
 
@@ -41,6 +42,7 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | `0x02` | `MEASURE_FREQUENCY` | 10 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, frequency_khz:u32 LE` | Same 9-byte result; tunes first, then captures and estimates noise floor. |
 | `0x03` | `SWEEP` | 18 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, start_khz:u32 LE, stop_khz:u32 LE, step_khz:u32 LE` | `9 + count*6` bytes: header `[request_id:u32 LE, opcode, status, channel, count:u16 LE]`, followed by `[frequency_khz:u32 LE, power_cdbfs:i16 LE]` points; `power_cdbfs` contains the DSP noise-floor estimate. |
 | `0x70` | `GET_RAW_IQ` | 8 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, complex_pairs:u16 LE` | 10-byte header `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE]` followed by interleaved I/Q bytes. |
+| `0x71` | `SAVE_IQ_TO_FILE` | Same 8-byte request as `GET_RAW_IQ` | 14 bytes: `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE, payload_bytes:u32 LE]`; samples are written locally, not returned over UDP. |
 | `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
 For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Radio status values are `0` success, `1` invalid, `2` not found, `3` not configured, `4` no active frontend, `5` invalid RX channel, `6` outside range or unsupported discrete value, `7` backend operation failed, `8` operation unsupported, and `9` capture failed. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; selecting it alone does not start a stream or transmit RF.
@@ -53,7 +55,23 @@ Selecting the currently active frontend leaves its open handle untouched. Select
 
 For compatibility, the existing `power_cdbfs` server field remains mean normalized window power (`10*log10(mean((I^2+Q^2)/FS^2))`) in signed centi-dBFS, not the Welch median floor. The separate PSD floor and signal bands are currently local analysis results; the server protocol is unchanged. This scalar does not distinguish broadband noise from a coherent signal and is not calibrated dBm. Frequency measurement leaves the radio tuned to the requested frequency. Sweep includes an explicit step (an extension to the source catalog, which only listed start/stop), permits at most 128 points, runs the same PSD analyzer for each point, and leaves the radio at its final point. RAW I/Q is capped at 4096 complex pairs and bypasses DSP, returning the captured buffer unchanged. Format `1` is signed 8-bit I/Q; format `2` is signed 16-bit little-endian I/Q components. RX operations have a 2-second capture bound. BladeRF reports its tuned frequency readback; HackRF has no frequency getter and reports the last successfully requested frequency. These values are not RF calibration measurements.
 
-The source catalog did not define the wire fields for these operations, so this implementation fixes them as shown above: a 4-byte little-endian RequestId precedes every radio opcode; settings use Hz; gain stage values use dB; measurements use centi-dBFS; and the new raw-IQ opcode is `0x70`. Unknown or malformed datagrams are ignored. The C# DemoServer does not yet dispatch these opcodes; the Python mock supports the extended set with `--full-radio-commands`.
+With `--iq-file /mnt/scaner-ram/captures.iqrec`, each successful capture is also appended to a local recording while continuing to its normal DSP or UDP destination. Network command `SAVE_IQ_TO_FILE` (`0x71`) captures a requested window and returns only a metadata ACK; it requires a configured file path and otherwise returns `NOT_CONFIGURED`. The remote client cannot choose the path. The file starts with 8-byte magic `SCIQREC1`; each record has a 40-byte little-endian header (`IQRF`, backend, channel, format, reserved, frequency Hz, sample rate Hz, bandwidth Hz, complex sample count, payload byte count, Unix timestamp seconds), followed by the original interleaved IQ bytes. Existing files are checked for the `SCIQREC1` magic and appended, never silently truncated. Record writes are flushed before a successful network ACK.
+
+To save exactly one requested capture from each physical frontend on the Pi, use `tools/record_iq_from_frontend.py`. It starts the node against a local UDP controller, selects one frontend, configures RX, sends `SAVE_IQ_TO_FILE`, validates the single-record file, and exits. The output path must be new; the tool refuses to overwrite it:
+
+```bash
+mkdir -p /home/rpi/iq-captures
+python3 tools/record_iq_from_frontend.py --client build-pi/scanner_node \
+  --device-json ../device.json --frontend-id 0 \
+  --output /home/rpi/iq-captures/bladerf_1000MHz.iqrec
+python3 tools/record_iq_from_frontend.py --client build-pi/scanner_node \
+  --device-json ../device.json --frontend-id 1 \
+  --output /home/rpi/iq-captures/hackrf_1000MHz.iqrec
+```
+
+Frontend IDs follow discovery order: BladeRF is `0`, HackRF is `1` when both are connected. The default capture is 4096 complex samples at 1 GHz and 2 MS/s; override with `--frequency-mhz`, `--samples`, `--sample-rate-hz`, or `--bandwidth-hz`.
+
+The source catalog did not define the wire fields for these operations, so this implementation fixes them as shown above: a 4-byte little-endian RequestId precedes every radio opcode; settings use Hz; gain stage values use dB; measurements use centi-dBFS; raw-IQ uses `0x70`; and local IQ-file capture uses `0x71`. Unknown or malformed datagrams are ignored. The C# DemoServer does not yet dispatch these opcodes; the Python mock supports the extended set with `--full-radio-commands`.
 
 After a valid VER response, the client remains in its UDP command loop indefinitely. `SET_ACTIVE_RADIO` opens the selected device and keeps its handle for later commands; switching frontend or selecting `0xff` closes the old handle. Exit sends its ACK, closes all radio handles and the socket, then returns success. There is no idle timeout; malformed and unknown datagrams are ignored. A fatal socket error can still terminate the process with failure.
 
@@ -557,7 +575,7 @@ Override either default with `--server` or `--device-json`. For example, to use 
 ./scanner_node --server 127.0.0.1 --device-json ../../device.json --save-device-json ./device-copy.json
 ```
 
-Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--software-version`, `--attempts`, `--handshake-timeout`, and `--ver-timeout`.
+Options: `--server`, `--server-port`, `--bind-address`, `--local-port`, `--device-json`, `--save-device-json`, `--iq-file`, `--software-version`, `--attempts`, `--handshake-timeout`, and `--ver-timeout`.
 
 ## Tests
 

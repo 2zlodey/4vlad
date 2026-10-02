@@ -27,6 +27,7 @@
 #define SCANNER_MEASURE_FREQUENCY_COMMAND 0x02u
 #define SCANNER_SWEEP_COMMAND 0x03u
 #define SCANNER_GET_RAW_IQ_COMMAND 0x70u
+#define SCANNER_SAVE_IQ_TO_FILE_COMMAND 0x71u
 #define SCANNER_MAX_SWEEP_POINTS 128u
 #define SCANNER_MAX_RAW_IQ_PAIRS SCANNER_RADIO_MAX_IQ_PAIRS
 #define SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE 10u
@@ -150,6 +151,7 @@ int scanner_decode_measure_frequency_request(const uint8_t *bytes, size_t size,
                                              ScannerMeasureFrequencyRequest *request);
 int scanner_decode_sweep_request(const uint8_t *bytes, size_t size, ScannerSweepRequest *request);
 int scanner_decode_raw_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request);
+int scanner_decode_save_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request);
 size_t scanner_encode_radio_frontends_response(uint8_t *output, size_t output_capacity, uint32_t request_id,
                                                const ScannerRadioInventory *inventory);
 size_t scanner_encode_set_active_radio_response(uint8_t output[7], uint32_t request_id, uint8_t status,
@@ -168,6 +170,8 @@ size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uin
 size_t scanner_encode_raw_iq_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                       uint8_t channel, uint8_t format, uint16_t complex_pairs, const uint8_t *iq,
                                       size_t iq_size);
+size_t scanner_encode_iq_file_response(uint8_t output[14], uint32_t request_id, uint8_t status, uint8_t channel,
+                                       uint8_t format, uint16_t complex_pairs, uint32_t payload_size);
 size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
                                      const int16_t *noise_floor_cdbfs);

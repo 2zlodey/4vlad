@@ -4,9 +4,12 @@
 #include "analysis_worker.h"
 #include "radio_worker.h"
 
+#include <stdio.h>
+
 typedef struct
 {
     ScannerAnalysisWorker *analysis_worker;
+    FILE *iq_file;
 } ScannerRadioCommandContext;
 
 int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,

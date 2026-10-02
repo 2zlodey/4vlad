@@ -91,6 +91,7 @@ endif()
 
 add_executable(scanner_node
     src/main.c
+    src/iq_recording.c
     src/radio_commands.c
     src/scanner_options.c
     src/scanner_session.c

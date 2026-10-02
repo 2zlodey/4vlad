@@ -2,12 +2,44 @@
 """Run scanner_node against the Python mock and verify frontend discovery/selection."""
 
 import argparse
+import atexit
+import os
 import socket
+import struct
 import subprocess
+import tempfile
 import threading
 import time
 
 from demo_server_mock import serve_one
+
+
+def validate_iq_recording(path, expected_records):
+    with open(path, "rb") as recording:
+        data = recording.read()
+    if not data.startswith(b"SCIQREC1"):
+        raise SystemExit("IQ recording has an invalid SCIQREC1 file header")
+
+    offset = 8
+    records = 0
+    while offset < len(data):
+        if len(data) - offset < 40 or data[offset : offset + 4] != b"IQRF":
+            raise SystemExit("IQ recording contains a truncated or invalid record header")
+        backend, channel, sample_format = data[offset + 4 : offset + 7]
+        frequency_hz, sample_rate_hz, bandwidth_hz, complex_samples, payload_size, timestamp = struct.unpack_from(
+            "<QIIIIQ", data, offset + 8
+        )
+        bytes_per_sample = 2 if sample_format == 1 else 4 if sample_format == 2 else 0
+        if (backend not in (1, 2, 3) or sample_rate_hz == 0 or bandwidth_hz == 0 or frequency_hz == 0
+                or complex_samples == 0 or timestamp == 0 or payload_size != complex_samples * bytes_per_sample):
+            raise SystemExit("IQ recording record metadata is invalid")
+        offset += 40 + payload_size
+        if offset > len(data):
+            raise SystemExit("IQ recording contains a truncated sample payload")
+        records += 1
+    if records != expected_records:
+        raise SystemExit("IQ recording has {} records, expected {}".format(records, expected_records))
+    return records
 
 
 def main():
@@ -21,6 +53,11 @@ def main():
         parser.error("--frontend-id must be between 0 and 255")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+
+    iq_fd, iq_file = tempfile.mkstemp(prefix="scanner-e2e-", suffix=".iqrec")
+    os.close(iq_fd)
+    os.unlink(iq_file)
+    atexit.register(lambda: os.path.exists(iq_file) and os.unlink(iq_file))
 
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     server.bind(("127.0.0.1", 0))
@@ -48,6 +85,8 @@ def main():
         "3333",
         "--device-json",
         args.device_json,
+        "--iq-file",
+        iq_file,
         "--attempts",
         "1",
         "--handshake-timeout",
@@ -113,10 +152,12 @@ def main():
     command_checks = inventory.get("commands_by_frontend", {}).get(str(args.frontend_id))
     expected_raw_iq_bytes = 64 * (2 if selected["iq_sample_format"] == 1 else 4)
     if (not command_checks or command_checks.get("raw_iq_bytes") != expected_raw_iq_bytes
+            or command_checks.get("saved_iq_bytes") != expected_raw_iq_bytes
             or command_checks.get("sweep_points") != 2):
         raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")
+    recorded_count = validate_iq_recording(iq_file, len(inventory["frontends"]) * 6)
     print(
-        "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/sweep=OK, neutral close=OK raw-IQ={}B IQ={}bit/fmt{} AGC=0x{:02x}".format(
+        "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/file-save/sweep=OK, neutral close=OK raw-IQ={}B records={} IQ={}bit/fmt{} AGC=0x{:02x}".format(
             len(inventory["frontends"]),
             args.frontend_id,
             selected["rx_channels"],
@@ -124,6 +165,7 @@ def main():
             selected["frequency_min_hz"],
             selected["frequency_max_hz"],
             expected_raw_iq_bytes,
+            recorded_count,
             selected["sample_resolution_bits"],
             selected["iq_sample_format"],
             selected["agc_modes"],

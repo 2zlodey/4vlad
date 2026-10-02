@@ -15,6 +15,7 @@ void scanner_options_print_usage(const char *program)
         "  --local-port N        Local/reply UDP port (default 3333)\n"
         "  --device-json PATH    Input device JSON (default ../scanner-node-build/device.json)\n"
         "  --save-device-json P  Write loaded Device JSON to P, then continue\n"
+        "  --iq-file PATH        Append captured IQ windows to a SCIQREC1 file\n"
         "  --software-version V  VER ASCII version, 1-10 bytes (default 1.0.0.0)\n"
         "  --attempts N          Handshake attempts (default 5)\n"
         "  --handshake-timeout N Handshake timeout in ms (default 2000)\n"
@@ -85,6 +86,8 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
             options->device_json = value;
         else if (strcmp(argument, "--save-device-json") == 0)
             options->save_device_json = value;
+        else if (strcmp(argument, "--iq-file") == 0)
+            options->iq_file = value;
         else if (strcmp(argument, "--software-version") == 0)
         {
             if (strlen(value) == 0 || strlen(value) > 10)

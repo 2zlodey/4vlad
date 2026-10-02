@@ -293,6 +293,21 @@ size_t scanner_encode_raw_iq_response(uint8_t *output, size_t capacity, uint32_t
     return required_size;
 }
 
+size_t scanner_encode_iq_file_response(uint8_t output[14], uint32_t request_id, uint8_t status, uint8_t channel,
+                                       uint8_t format, uint16_t complex_pairs, uint32_t payload_size)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_SAVE_IQ_TO_FILE_COMMAND;
+    output[5] = status;
+    output[6] = channel;
+    output[7] = format;
+    write_le(output + 8, complex_pairs, 2);
+    write_le(output + 10, payload_size, 4);
+    return 14;
+}
+
 size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
                                      const int16_t *noise_floor_cdbfs)
@@ -431,6 +446,16 @@ int scanner_decode_sweep_request(const uint8_t *bytes, size_t size, ScannerSweep
 int scanner_decode_raw_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request)
 {
     if (bytes == NULL || request == NULL || size != 8u || bytes[4] != 0x70u)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->complex_pairs = read_u16_le(bytes + 6);
+    return request->complex_pairs > 0 && request->complex_pairs <= SCANNER_RADIO_MAX_IQ_PAIRS;
+}
+
+int scanner_decode_save_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 8u || bytes[4] != SCANNER_SAVE_IQ_TO_FILE_COMMAND)
         return 0;
     request->request_id = read_u32_le(bytes);
     request->channel = bytes[5];

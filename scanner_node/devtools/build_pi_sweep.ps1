@@ -21,13 +21,16 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $familyRoot = Split-Path -Parent $projectRoot
 $cJsonRoot = Join-Path $familyRoot 'cJSON'
 $deviceJson = Join-Path $familyRoot 'device.json'
-$remoteNode = "$RemoteRoot/scanner_node"
-$remoteCJson = "$RemoteRoot/cJSON"
-$remoteDeviceJson = "$RemoteRoot/device.json"
 $ssh = (Get-Command ssh -ErrorAction Stop).Source
 $scp = (Get-Command scp -ErrorAction Stop).Source
 $sshOptions = @('-i', $IdentityFile, '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10')
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$remoteRunRoot = "$RemoteRoot/run_$stamp"
+$remoteNode = "$remoteRunRoot/scanner_node"
+$remoteCJson = "$remoteRunRoot/cJSON"
+$remoteTools = "$remoteNode/tools"
+$remotePerf = "$remoteNode/perf_lib"
+$remoteDeviceJson = "$remoteRunRoot/device.json"
 $remoteLog = "/home/rpi/sweep_perf_$stamp.log"
 $localLog = Join-Path $projectRoot "measurements\sweep_pi_$stamp.log"
 
@@ -49,21 +52,34 @@ function ConvertTo-ShellLiteral {
 
 $remoteNodeLiteral = ConvertTo-ShellLiteral $remoteNode
 $remoteCJsonLiteral = ConvertTo-ShellLiteral $remoteCJson
-$remoteRootLiteral = ConvertTo-ShellLiteral $RemoteRoot
-Invoke-Checked $ssh ($sshOptions + @($PiHost, "mkdir -p $remoteNodeLiteral $remoteCJsonLiteral $remoteRootLiteral"))
+Invoke-Checked $ssh ($sshOptions + @(
+    $PiHost,
+    "mkdir -p $remoteNodeLiteral $remoteCJsonLiteral '$remoteTools' '$remotePerf'"
+))
 
 $sourceDirectories = @(
     (Join-Path $projectRoot 'include'),
-    (Join-Path $projectRoot 'src'),
-    (Join-Path $projectRoot 'perf_lib'),
-    (Join-Path $projectRoot 'tools')
+    (Join-Path $projectRoot 'src')
 )
 Invoke-Checked $scp ($sshOptions + @('-r') + $sourceDirectories + @("${PiHost}:$remoteNode/"))
 Invoke-Checked $scp ($sshOptions + @(
     (Join-Path $projectRoot 'CMakeLists.txt'),
     (Join-Path $projectRoot 'build_pi.sh'),
-    (Join-Path $projectRoot 'README.md'),
     "${PiHost}:$remoteNode/"
+))
+Invoke-Checked $scp ($sshOptions + @(
+    (Join-Path $projectRoot 'perf_lib\perf_probe.c'),
+    (Join-Path $projectRoot 'perf_lib\perf_probe.h'),
+    (Join-Path $projectRoot 'perf_lib\perf_probe_hal.h'),
+    (Join-Path $projectRoot 'perf_lib\perf_probe_hal_host.c'),
+    "${PiHost}:$remotePerf/"
+))
+Invoke-Checked $scp ($sshOptions + @(
+    (Join-Path $projectRoot 'tools\bladerf_band_capture.c'),
+    (Join-Path $projectRoot 'tools\sdr_sweep_benchmark.c'),
+    (Join-Path $projectRoot 'tools\record_iq_from_frontend.py'),
+    (Join-Path $projectRoot 'tools\demo_server_mock.py'),
+    "${PiHost}:$remoteTools/"
 ))
 Invoke-Checked $scp ($sshOptions + @(
     (Join-Path $cJsonRoot 'cJSON.c'),
@@ -74,7 +90,7 @@ Invoke-Checked $scp ($sshOptions + @($deviceJson, "${PiHost}:$remoteDeviceJson")
 
 Invoke-Checked $ssh ($sshOptions + @('-tt', $PiHost, "cd $remoteNodeLiteral && sh ./build_pi.sh"))
 if ($BuildOnly) {
-    Write-Host 'Pi build passed; benchmark skipped.'
+    Write-Host "Pi build passed; benchmark skipped. Staged project: $remoteNode"
     return
 }
 
