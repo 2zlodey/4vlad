@@ -5,6 +5,7 @@ project(orkestr_scanner_node VERSION 0.1.0 LANGUAGES C)
 find_package(Threads REQUIRED)
 
 option(SCANNER_ENABLE_STUB_SDR "Provide an in-memory SDR frontend when no physical radio is found" ON)
+option(SCANNER_ENABLE_PERF "Enable performance probes and the hardware sweep benchmark" ON)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -34,6 +35,17 @@ add_library(scanner_analysis STATIC src/analysis_worker.c)
 target_include_directories(scanner_analysis PUBLIC include)
 target_link_libraries(scanner_analysis PUBLIC scanner_classifier Threads::Threads)
 
+add_library(scanner_perf STATIC
+    perf_lib/perf_probe.c
+    perf_lib/perf_probe_hal_host.c
+)
+target_include_directories(scanner_perf PUBLIC perf_lib)
+target_link_libraries(scanner_perf PUBLIC Threads::Threads)
+if(SCANNER_ENABLE_PERF)
+    target_compile_definitions(scanner_perf PUBLIC CONFIG_PERF_ENABLE=1 CONFIG_PERF_STRINGS=1
+                                                   CONFIG_PERF_LOG_ENABLE=1)
+endif()
+
 add_library(scanner_radio STATIC src/radio_frontend.c)
 target_include_directories(scanner_radio PUBLIC include)
 target_link_libraries(scanner_radio PUBLIC scanner_dsp)
@@ -45,7 +57,7 @@ else()
 endif()
 
 find_path(SCANNER_BLADERF_INCLUDE_DIR NAMES libbladeRF.h)
-find_library(SCANNER_BLADERF_LIBRARY NAMES bladerf libbladeRF)
+find_library(SCANNER_BLADERF_LIBRARY NAMES bladerf bladeRF)
 if(SCANNER_BLADERF_INCLUDE_DIR AND SCANNER_BLADERF_LIBRARY)
     target_compile_definitions(scanner_radio PRIVATE SCANNER_HAVE_BLADERF)
     target_include_directories(scanner_radio PRIVATE ${SCANNER_BLADERF_INCLUDE_DIR})
@@ -72,11 +84,17 @@ add_executable(scanner_node
     src/udp_socket.c
 )
 target_include_directories(scanner_node PRIVATE include)
-target_link_libraries(scanner_node PRIVATE scanner_protocol scanner_radio scanner_analysis Threads::Threads)
+target_link_libraries(scanner_node PRIVATE scanner_protocol scanner_radio scanner_analysis scanner_perf
+                                           Threads::Threads)
 
 add_executable(scanner_bladerf_band_capture tools/bladerf_band_capture.c)
 target_include_directories(scanner_bladerf_band_capture PRIVATE include)
 target_link_libraries(scanner_bladerf_band_capture PRIVATE scanner_radio scanner_classifier)
+
+add_executable(scanner_sweep_benchmark tools/sdr_sweep_benchmark.c)
+target_include_directories(scanner_sweep_benchmark PRIVATE include)
+target_link_libraries(scanner_sweep_benchmark PRIVATE scanner_radio scanner_analysis scanner_perf
+                                                     Threads::Threads)
 
 if(WIN32)
     target_link_libraries(scanner_node PRIVATE ws2_32)
@@ -87,17 +105,21 @@ if(MSVC)
     target_compile_options(scanner_dsp PRIVATE /W4)
     target_compile_options(scanner_classifier PRIVATE /W4)
     target_compile_options(scanner_analysis PRIVATE /W4)
+    target_compile_options(scanner_perf PRIVATE /W4)
     target_compile_options(scanner_radio PRIVATE /W4)
     target_compile_options(scanner_node PRIVATE /W4)
     target_compile_options(scanner_bladerf_band_capture PRIVATE /W4)
+    target_compile_options(scanner_sweep_benchmark PRIVATE /W4)
 else()
     target_compile_options(scanner_protocol PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_dsp PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_classifier PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_analysis PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(scanner_perf PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_radio PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_node PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(scanner_bladerf_band_capture PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(scanner_sweep_benchmark PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 include(CTest)

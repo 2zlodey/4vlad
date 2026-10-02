@@ -11,6 +11,7 @@
 
 #include "analysis_worker.h"
 #include "device_config.h"
+#include "perf_probe.h"
 #include "protocol.h"
 #include "radio_worker.h"
 #include "signal_classifier.h"
@@ -44,6 +45,8 @@ typedef struct
     ScannerAnalysisWorker *analysis_worker;
 } ScannerAppContext;
 
+// HackRF: 41.426 с, в среднем 82.686 мс/точка.
+// BladeRF: 13.361 с, в среднем 26.665 мс/точка.
 static void print_usage(const char *program)
 {
     printf(
@@ -339,6 +342,7 @@ static int handle_radio_command(ScannerRadioWorker *worker, ScannerRadioInventor
     ScannerRawIqRequest raw_iq_request;
     const ScannerRadioFrontend *active_frontend;
     ScannerAppContext *app = (ScannerAppContext *)context;
+    PERF_SCOPE("radio.command");
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {
@@ -779,6 +783,7 @@ static int run_node(const Options *options)
 
     memset(&socket_handle, 0, sizeof(socket_handle));
     socket_handle.handle = SCANNER_INVALID_SOCKET;
+    perf_init();
     if (!device_load_json(options->device_json, &device, error, sizeof(error)))
     {
         fprintf(stderr, "Device JSON: %s\n", error);
@@ -941,6 +946,7 @@ cleanup:
         scanner_radio_close_all(&radio_inventory);
     if (analysis_worker != NULL)
         scanner_analysis_worker_stop(&analysis_worker);
+    perf_report_and_reset();
     scanner_udp_close(&socket_handle);
     return result == 1;
 }

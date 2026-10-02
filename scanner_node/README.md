@@ -65,6 +65,18 @@ For a focused real BladeRF band-edge survey, build and run `tools/bladerf_band_c
 
 After VER, the UDP/network thread owns the socket, validates the peer endpoint, queues radio requests, and sends all radio responses. A single radio worker owns the mutable radio inventory and device handles; it processes requests serially through bounded request/result queues (8 entries each). This keeps long sweeps and captures out of the socket loop without allowing concurrent access to a radio handle. `EXIT` cancels an active sweep between capture points, discards queued radio work, returns its ACK through the network thread, and then closes the radio worker. Individual hardware captures remain bounded by a 2-second timeout; shutdown can wait for an in-flight backend capture to return.
 
+### Performance Probes
+
+`perf_lib` is built as a separate library and uses a host HAL: `QueryPerformanceCounter` on Windows and `CLOCK_MONOTONIC`/pthread critical sections on Linux. `SCANNER_ENABLE_PERF` defaults to `ON`; disable it with `-DSCANNER_ENABLE_PERF=OFF` to compile the scope macros to no-ops. The radio command handler records command latency, and the benchmark reports aggregate total-sweep and per-frequency timing.
+
+`scanner_sweep_benchmark` measures a complete receive-and-process sweep on HackRF and BladeRF serially. The default is `1000..6000 MHz` at `10 MHz` steps (501 points per radio), `2 MS/s`, `1.75 MHz` bandwidth, and 4096 complex samples plus Welch/classifier analysis per point. Run only with both radios connected and a receive-safe antenna/load:
+
+```powershell
+build\scanner_sweep_benchmark.exe 1000 6000 10
+```
+
+On the Pi, build the tool with the native flags in the deployment section, then run `./scanner_sweep_benchmark 1000 6000 10`. Output includes wall-clock sweep seconds and `perf_lib` min/average/max per-point times. This measures the current RX tune + capture + DSP/classifier path; it is not just FFT CPU time.
+
 ### Capability Descriptor
 
 Each descriptor is exactly 128 bytes. Integers are unsigned unless explicitly marked signed; all multibyte fields are little-endian. Offsets below are relative to the start of one descriptor.
@@ -353,10 +365,11 @@ The verified Pi image has GCC but not CMake/Make, so use the direct C99 build fr
 ```bash
 cd /mnt/scaner-ram/orkestr-scanner/scanner_node
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
-  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
+  -DCONFIG_PERF_ENABLE=1 -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -DSCANNER_ENABLE_STUB_SDR \
   -Iinclude -I../cJSON \
-  src/main.c src/radio_worker.c src/analysis_worker.c src/device_config.c src/protocol.c src/udp_socket.c \
-  src/radio_frontend.c src/dsp.c src/signal_classifier.c ../cJSON/cJSON.c \
+  -Iperf_lib src/main.c src/radio_worker.c src/analysis_worker.c src/device_config.c src/protocol.c src/udp_socket.c \
+  src/radio_frontend.c src/dsp.c src/signal_classifier.c perf_lib/perf_probe.c \
+  perf_lib/perf_probe_hal_host.c ../cJSON/cJSON.c \
   -lm -lbladeRF -lhackrf -o scanner_node
 
 gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
@@ -385,6 +398,12 @@ gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic \
   -Iinclude tests/udp_integration_tests.c src/udp_socket.c src/protocol.c \
   -lm -o scanner_udp_integration_tests
 ./scanner_udp_integration_tests
+
+gcc -std=c99 -D_POSIX_C_SOURCE=200809L -DCONFIG_PERF_ENABLE=1 -O2 -Wall -Wextra -Wpedantic -pthread \
+  -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -Iinclude -Iperf_lib \
+  tools/sdr_sweep_benchmark.c src/radio_frontend.c src/analysis_worker.c src/dsp.c \
+  src/signal_classifier.c perf_lib/perf_probe.c perf_lib/perf_probe_hal_host.c \
+  -lm -lbladeRF -lhackrf -o sdr_sweep_benchmark
 ./scanner_node --help
 ```
 
@@ -392,6 +411,8 @@ gcc -std=c99 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Wpedantic -pthread \
   -DSCANNER_HAVE_BLADERF -DSCANNER_HAVE_HACKRF -Iinclude \
   tools/bladerf_band_capture.c src/radio_frontend.c src/dsp.c src/signal_classifier.c \
   -lm -lbladeRF -lhackrf -o bladerf_band_capture
+
+./sdr_sweep_benchmark 1000 6000 10
 
 Expected: protocol, DSP/classifier, analysis-worker, and radio-worker tests exit 0; the UDP test prints `Handshake/session/VER UDP exchange passed.`; `file scanner_node` reports a 32-bit ARM EABI executable. No root privileges are needed for local port 3333 or the mock port 2653.
 
