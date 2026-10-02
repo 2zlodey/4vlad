@@ -29,7 +29,7 @@ add_library(scanner_protocol STATIC
 target_include_directories(scanner_protocol PUBLIC include)
 target_link_libraries(scanner_protocol PUBLIC cjson)
 
-add_library(scanner_dsp STATIC src/dsp.c)
+add_library(scanner_dsp STATIC src/dsp.c src/dsp_features.c)
 target_include_directories(scanner_dsp PUBLIC include)
 if(UNIX)
     target_link_libraries(scanner_dsp PUBLIC m)

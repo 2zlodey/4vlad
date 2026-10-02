@@ -1,22 +1,14 @@
 #include "analysis_worker.h"
 #include "signal_classifier.h"
+#include "worker_sync.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-typedef CRITICAL_SECTION AnalysisMutex;
-typedef CONDITION_VARIABLE AnalysisCondition;
 typedef HANDLE AnalysisThread;
 #else
-#include <errno.h>
-#include <pthread.h>
-#include <unistd.h>
-typedef pthread_mutex_t AnalysisMutex;
-typedef pthread_cond_t AnalysisCondition;
 typedef pthread_t AnalysisThread;
 #endif
 
@@ -43,10 +35,10 @@ typedef struct
 
 struct ScannerAnalysisWorker
 {
-    AnalysisMutex mutex;
-    AnalysisCondition job_ready;
-    AnalysisCondition job_space;
-    AnalysisCondition completion_ready;
+    ScannerMutex mutex;
+    ScannerCondition job_ready;
+    ScannerCondition job_space;
+    ScannerCondition completion_ready;
     AnalysisThread thread;
     AnalysisJob jobs[SCANNER_ANALYSIS_QUEUE_CAPACITY];
     AnalysisCompletion completions[SCANNER_ANALYSIS_QUEUE_CAPACITY];
@@ -57,51 +49,6 @@ struct ScannerAnalysisWorker
     uint64_t next_job_id;
     int stopping;
 };
-
-static void analysis_lock(ScannerAnalysisWorker *worker)
-{
-#ifdef _WIN32
-    EnterCriticalSection(&worker->mutex);
-#else
-    (void)pthread_mutex_lock(&worker->mutex);
-#endif
-}
-
-static void analysis_unlock(ScannerAnalysisWorker *worker)
-{
-#ifdef _WIN32
-    LeaveCriticalSection(&worker->mutex);
-#else
-    (void)pthread_mutex_unlock(&worker->mutex);
-#endif
-}
-
-static void analysis_wait(ScannerAnalysisWorker *worker, AnalysisCondition *condition)
-{
-#ifdef _WIN32
-    (void)SleepConditionVariableCS(condition, &worker->mutex, INFINITE);
-#else
-    (void)pthread_cond_wait(condition, &worker->mutex);
-#endif
-}
-
-static void analysis_signal(AnalysisCondition *condition)
-{
-#ifdef _WIN32
-    WakeConditionVariable(condition);
-#else
-    (void)pthread_cond_signal(condition);
-#endif
-}
-
-static void analysis_broadcast(AnalysisCondition *condition)
-{
-#ifdef _WIN32
-    WakeAllConditionVariable(condition);
-#else
-    (void)pthread_cond_broadcast(condition);
-#endif
-}
 
 static void set_error(char *error, size_t error_size, const char *message, int code)
 {
@@ -156,37 +103,37 @@ static void analysis_run(ScannerAnalysisWorker *worker)
         AnalysisJob job;
         AnalysisCompletion completion;
         size_t completion_tail;
-        analysis_lock(worker);
+        scanner_mutex_lock(&worker->mutex);
         while (worker->job_count == 0 && !worker->stopping)
-            analysis_wait(worker, &worker->job_ready);
+            scanner_condition_wait(&worker->job_ready, &worker->mutex);
         if (worker->stopping && worker->job_count == 0)
         {
-            analysis_unlock(worker);
+            scanner_mutex_unlock(&worker->mutex);
             break;
         }
         job = worker->jobs[worker->job_head];
         worker->job_head = (worker->job_head + 1u) % SCANNER_ANALYSIS_QUEUE_CAPACITY;
         worker->job_count--;
-        analysis_signal(&worker->job_space);
-        analysis_unlock(worker);
+        scanner_condition_signal(&worker->job_space);
+        scanner_mutex_unlock(&worker->mutex);
 
         memset(&completion, 0, sizeof(completion));
         completion.job_id = job.job_id;
         completion.success = analyze_job(&job, &completion);
 
-        analysis_lock(worker);
+        scanner_mutex_lock(&worker->mutex);
         while (worker->completion_count == SCANNER_ANALYSIS_QUEUE_CAPACITY && !worker->stopping)
-            analysis_wait(worker, &worker->completion_ready);
+            scanner_condition_wait(&worker->completion_ready, &worker->mutex);
         if (worker->stopping)
         {
-            analysis_unlock(worker);
+            scanner_mutex_unlock(&worker->mutex);
             continue;
         }
         completion_tail = (worker->completion_head + worker->completion_count) % SCANNER_ANALYSIS_QUEUE_CAPACITY;
         worker->completions[completion_tail] = completion;
         worker->completion_count++;
-        analysis_broadcast(&worker->completion_ready);
-        analysis_unlock(worker);
+        scanner_condition_broadcast(&worker->completion_ready);
+        scanner_mutex_unlock(&worker->mutex);
     }
 }
 
@@ -304,12 +251,12 @@ int scanner_analysis_worker_analyze(ScannerAnalysisWorker *worker, const uint8_t
     job.minimum_band_bins = minimum_band_bins;
     memcpy(job.iq, iq, iq_size);
 
-    analysis_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     while (worker->job_count == SCANNER_ANALYSIS_QUEUE_CAPACITY && !worker->stopping)
-        analysis_wait(worker, &worker->job_space);
+        scanner_condition_wait(&worker->job_space, &worker->mutex);
     if (worker->stopping)
     {
-        analysis_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
         return 0;
     }
     job_id = ++worker->next_job_id;
@@ -317,7 +264,7 @@ int scanner_analysis_worker_analyze(ScannerAnalysisWorker *worker, const uint8_t
     tail = (worker->job_head + worker->job_count) % SCANNER_ANALYSIS_QUEUE_CAPACITY;
     worker->jobs[tail] = job;
     worker->job_count++;
-    analysis_signal(&worker->job_ready);
+    scanner_condition_signal(&worker->job_ready);
 
     for (;;)
     {
@@ -335,8 +282,8 @@ int scanner_analysis_worker_analyze(ScannerAnalysisWorker *worker, const uint8_t
                     worker->completions[to] = worker->completions[from];
                 }
                 worker->completion_count--;
-                analysis_signal(&worker->completion_ready);
-                analysis_unlock(worker);
+                scanner_condition_signal(&worker->completion_ready);
+                scanner_mutex_unlock(&worker->mutex);
                 if (!completion.success)
                 {
                     if (error != NULL && error_size > 0)
@@ -349,10 +296,10 @@ int scanner_analysis_worker_analyze(ScannerAnalysisWorker *worker, const uint8_t
         }
         if (worker->stopping)
         {
-            analysis_unlock(worker);
+            scanner_mutex_unlock(&worker->mutex);
             return 0;
         }
-        analysis_wait(worker, &worker->completion_ready);
+        scanner_condition_wait(&worker->completion_ready, &worker->mutex);
     }
 }
 
@@ -362,12 +309,12 @@ void scanner_analysis_worker_stop(ScannerAnalysisWorker **worker_pointer)
     if (worker_pointer == NULL || *worker_pointer == NULL)
         return;
     worker = *worker_pointer;
-    analysis_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     worker->stopping = 1;
-    analysis_broadcast(&worker->job_ready);
-    analysis_broadcast(&worker->job_space);
-    analysis_broadcast(&worker->completion_ready);
-    analysis_unlock(worker);
+    scanner_condition_broadcast(&worker->job_ready);
+    scanner_condition_broadcast(&worker->job_space);
+    scanner_condition_broadcast(&worker->completion_ready);
+    scanner_mutex_unlock(&worker->mutex);
 #ifdef _WIN32
     WaitForSingleObject(worker->thread, INFINITE);
     CloseHandle(worker->thread);

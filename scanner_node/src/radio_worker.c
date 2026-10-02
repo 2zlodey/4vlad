@@ -1,22 +1,13 @@
 #include "radio_worker.h"
+#include "worker_sync.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-typedef CRITICAL_SECTION ScannerWorkerMutex;
-typedef CONDITION_VARIABLE ScannerWorkerCondition;
 typedef HANDLE ScannerWorkerThread;
 #else
-#include <errno.h>
-#include <pthread.h>
-#include <unistd.h>
-
-typedef pthread_mutex_t ScannerWorkerMutex;
-typedef pthread_cond_t ScannerWorkerCondition;
 typedef pthread_t ScannerWorkerThread;
 #endif
 
@@ -25,9 +16,9 @@ struct ScannerRadioWorker
     ScannerRadioInventory *inventory;
     ScannerRadioWorkerHandler handler;
     void *context;
-    ScannerWorkerMutex mutex;
-    ScannerWorkerCondition request_ready;
-    ScannerWorkerCondition response_space;
+    ScannerMutex mutex;
+    ScannerCondition request_ready;
+    ScannerCondition response_space;
     ScannerWorkerThread thread;
     ScannerDatagram requests[SCANNER_RADIO_WORKER_QUEUE_CAPACITY];
     ScannerRadioWorkerResult responses[SCANNER_RADIO_WORKER_QUEUE_CAPACITY];
@@ -39,51 +30,6 @@ struct ScannerRadioWorker
     int current_active;
     int cancel_current;
 };
-
-static void worker_lock(ScannerRadioWorker *worker)
-{
-#ifdef _WIN32
-    EnterCriticalSection(&worker->mutex);
-#else
-    (void)pthread_mutex_lock(&worker->mutex);
-#endif
-}
-
-static void worker_unlock(ScannerRadioWorker *worker)
-{
-#ifdef _WIN32
-    LeaveCriticalSection(&worker->mutex);
-#else
-    (void)pthread_mutex_unlock(&worker->mutex);
-#endif
-}
-
-static void worker_wait(ScannerRadioWorker *worker, ScannerWorkerCondition *condition)
-{
-#ifdef _WIN32
-    (void)SleepConditionVariableCS(condition, &worker->mutex, INFINITE);
-#else
-    (void)pthread_cond_wait(condition, &worker->mutex);
-#endif
-}
-
-static void worker_signal(ScannerWorkerCondition *condition)
-{
-#ifdef _WIN32
-    WakeConditionVariable(condition);
-#else
-    (void)pthread_cond_signal(condition);
-#endif
-}
-
-static void worker_broadcast(ScannerWorkerCondition *condition)
-{
-#ifdef _WIN32
-    WakeAllConditionVariable(condition);
-#else
-    (void)pthread_cond_broadcast(condition);
-#endif
-}
 
 static void set_error(char *error, size_t error_size, const char *message, int code)
 {
@@ -99,18 +45,18 @@ static void set_error(char *error, size_t error_size, const char *message, int c
 static int publish_result(ScannerRadioWorker *worker, const ScannerRadioWorkerResult *result)
 {
     size_t tail;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     while (worker->response_count == SCANNER_RADIO_WORKER_QUEUE_CAPACITY && !worker->stopping)
-        worker_wait(worker, &worker->response_space);
+        scanner_condition_wait(&worker->response_space, &worker->mutex);
     if (worker->stopping)
     {
-        worker_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
         return 0;
     }
     tail = (worker->response_head + worker->response_count) % SCANNER_RADIO_WORKER_QUEUE_CAPACITY;
     worker->responses[tail] = *result;
     worker->response_count++;
-    worker_unlock(worker);
+    scanner_mutex_unlock(&worker->mutex);
     return 1;
 }
 
@@ -123,12 +69,12 @@ static void worker_run(ScannerRadioWorker *worker)
         size_t request_index;
         int action;
 
-        worker_lock(worker);
+        scanner_mutex_lock(&worker->mutex);
         while (worker->request_count == 0 && !worker->stopping)
-            worker_wait(worker, &worker->request_ready);
+            scanner_condition_wait(&worker->request_ready, &worker->mutex);
         if (worker->stopping)
         {
-            worker_unlock(worker);
+            scanner_mutex_unlock(&worker->mutex);
             break;
         }
         request_index = worker->request_head;
@@ -137,7 +83,7 @@ static void worker_run(ScannerRadioWorker *worker)
         worker->request_count--;
         worker->current_active = 1;
         worker->cancel_current = 0;
-        worker_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
 
         memset(&result, 0, sizeof(result));
         action = worker->handler(worker, worker->inventory, &request, &result, worker->context);
@@ -157,10 +103,10 @@ static void worker_run(ScannerRadioWorker *worker)
         if ((result.size > 0 || result.fatal || result.close_after_send) && !publish_result(worker, &result))
             action = 0;
 
-        worker_lock(worker);
+        scanner_mutex_lock(&worker->mutex);
         worker->current_active = 0;
         worker->cancel_current = 0;
-        worker_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
         if (action != 1 || result.fatal || result.close_after_send)
             break;
     }
@@ -258,17 +204,17 @@ int scanner_radio_worker_submit(ScannerRadioWorker *worker, const ScannerDatagra
     size_t tail;
     if (worker == NULL || request == NULL || request->size > sizeof(request->payload))
         return 0;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     if (worker->stopping || worker->request_count == SCANNER_RADIO_WORKER_QUEUE_CAPACITY)
     {
-        worker_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
         return 0;
     }
     tail = (worker->request_head + worker->request_count) % SCANNER_RADIO_WORKER_QUEUE_CAPACITY;
     worker->requests[tail] = *request;
     worker->request_count++;
-    worker_signal(&worker->request_ready);
-    worker_unlock(worker);
+    scanner_condition_signal(&worker->request_ready);
+    scanner_mutex_unlock(&worker->mutex);
     return 1;
 }
 
@@ -276,17 +222,17 @@ int scanner_radio_worker_receive(ScannerRadioWorker *worker, ScannerRadioWorkerR
 {
     if (worker == NULL || result == NULL)
         return 0;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     if (worker->response_count == 0)
     {
-        worker_unlock(worker);
+        scanner_mutex_unlock(&worker->mutex);
         return 0;
     }
     *result = worker->responses[worker->response_head];
     worker->response_head = (worker->response_head + 1u) % SCANNER_RADIO_WORKER_QUEUE_CAPACITY;
     worker->response_count--;
-    worker_signal(&worker->response_space);
-    worker_unlock(worker);
+    scanner_condition_signal(&worker->response_space);
+    scanner_mutex_unlock(&worker->mutex);
     return 1;
 }
 
@@ -294,11 +240,11 @@ void scanner_radio_worker_cancel_for_exit(ScannerRadioWorker *worker)
 {
     if (worker == NULL)
         return;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     worker->request_head = 0;
     worker->request_count = 0;
     worker->cancel_current = 1;
-    worker_unlock(worker);
+    scanner_mutex_unlock(&worker->mutex);
 }
 
 int scanner_radio_worker_current_cancelled(ScannerRadioWorker *worker)
@@ -306,9 +252,9 @@ int scanner_radio_worker_current_cancelled(ScannerRadioWorker *worker)
     int cancelled;
     if (worker == NULL)
         return 1;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     cancelled = worker->stopping || worker->cancel_current;
-    worker_unlock(worker);
+    scanner_mutex_unlock(&worker->mutex);
     return cancelled;
 }
 
@@ -318,12 +264,12 @@ void scanner_radio_worker_stop(ScannerRadioWorker **worker_pointer)
     if (worker_pointer == NULL || *worker_pointer == NULL)
         return;
     worker = *worker_pointer;
-    worker_lock(worker);
+    scanner_mutex_lock(&worker->mutex);
     worker->stopping = 1;
     worker->cancel_current = 1;
-    worker_broadcast(&worker->request_ready);
-    worker_broadcast(&worker->response_space);
-    worker_unlock(worker);
+    scanner_condition_broadcast(&worker->request_ready);
+    scanner_condition_broadcast(&worker->response_space);
+    scanner_mutex_unlock(&worker->mutex);
 #ifdef _WIN32
     WaitForSingleObject(worker->thread, INFINITE);
     CloseHandle(worker->thread);
