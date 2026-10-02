@@ -54,7 +54,10 @@ if(SCANNER_ENABLE_PERF)
                                                    CONFIG_PERF_LOG_ENABLE=1)
 endif()
 
-add_library(scanner_radio STATIC src/radio_frontend.c)
+add_library(scanner_radio STATIC
+    src/radio_frontend.c
+    src/radio_capture_backend.c
+)
 target_include_directories(scanner_radio PUBLIC include)
 target_link_libraries(scanner_radio PUBLIC scanner_dsp)
 if(SCANNER_ENABLE_STUB_SDR)

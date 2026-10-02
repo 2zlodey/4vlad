@@ -5,16 +5,11 @@
 #include "radio_frontend.h"
 
 #include "dsp.h"
+#include "radio_capture_backend.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 #ifdef SCANNER_HAVE_BLADERF
 #include <libbladeRF.h>
@@ -22,83 +17,10 @@
 
 #ifdef SCANNER_HAVE_HACKRF
 #include <libhackrf/hackrf.h>
-#ifndef _WIN32
-#include <pthread.h>
-#endif
 #endif
 
 #define SCANNER_COMMON_FREQUENCY_MIN_HZ UINT64_C(70000000)
 #define SCANNER_COMMON_FREQUENCY_MAX_HZ UINT64_C(6000000000)
-
-#ifdef SCANNER_HAVE_HACKRF
-typedef struct
-{
-    uint8_t *output;
-    size_t capacity;
-    size_t bytes_written;
-#ifdef _WIN32
-    CRITICAL_SECTION mutex;
-#else
-    pthread_mutex_t mutex;
-#endif
-} HackrfCaptureContext;
-
-static void hackrf_context_lock(HackrfCaptureContext *context)
-{
-#ifdef _WIN32
-    EnterCriticalSection(&context->mutex);
-#else
-    (void)pthread_mutex_lock(&context->mutex);
-#endif
-}
-
-static void hackrf_context_unlock(HackrfCaptureContext *context)
-{
-#ifdef _WIN32
-    LeaveCriticalSection(&context->mutex);
-#else
-    (void)pthread_mutex_unlock(&context->mutex);
-#endif
-}
-
-static int hackrf_context_init(HackrfCaptureContext *context)
-{
-#ifdef _WIN32
-    InitializeCriticalSection(&context->mutex);
-    return 1;
-#else
-    return pthread_mutex_init(&context->mutex, NULL) == 0;
-#endif
-}
-
-static void hackrf_context_destroy(HackrfCaptureContext *context)
-{
-#ifdef _WIN32
-    DeleteCriticalSection(&context->mutex);
-#else
-    (void)pthread_mutex_destroy(&context->mutex);
-#endif
-}
-
-static int hackrf_capture_callback(hackrf_transfer *transfer)
-{
-    HackrfCaptureContext *context;
-    size_t remaining;
-    size_t copy_size;
-    if (transfer == NULL || transfer->rx_ctx == NULL || transfer->buffer == NULL || transfer->valid_length < 0)
-        return -1;
-    context = (HackrfCaptureContext *)transfer->rx_ctx;
-    hackrf_context_lock(context);
-    remaining = context->capacity - context->bytes_written;
-    copy_size = (size_t)transfer->valid_length;
-    if (copy_size > remaining)
-        copy_size = remaining;
-    memcpy(context->output + context->bytes_written, transfer->buffer, copy_size);
-    context->bytes_written += copy_size;
-    hackrf_context_unlock(context);
-    return 0;
-}
-#endif
 
 #if defined(SCANNER_HAVE_BLADERF) || defined(SCANNER_HAVE_HACKRF)
 static uint64_t range_value_u64(int64_t value, float scale)
@@ -666,18 +588,6 @@ static ScannerRadioFrontend *active_frontend_mutable(ScannerRadioInventory *inve
     return frontend;
 }
 
-#ifdef SCANNER_HAVE_BLADERF
-static int ensure_capture_buffer(ScannerRadioFrontend *frontend)
-{
-    size_t capacity;
-    if (frontend->capture_buffer != NULL)
-        return 1;
-    capacity = (size_t)SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * frontend->rx_channels * 2u * sizeof(int16_t);
-    frontend->capture_buffer = malloc(capacity);
-    return frontend->capture_buffer != NULL;
-}
-#endif
-
 int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
                                   uint32_t *actual_hz)
 {
@@ -903,207 +813,35 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
     return 1;
 }
 
-typedef struct
-{
-    uint64_t frequency_hz;
-    int16_t power_cdbfs;
-} StubSpectrumPoint;
-
-static int16_t stub_target_power_cdbfs(uint64_t frequency_hz)
-{
-    static const StubSpectrumPoint profile[] = {
-        { UINT64_C(100000000), -1200 },  { UINT64_C(300000000), -2200 },  { UINT64_C(450000000), -900 },
-        { UINT64_C(650000000), -2000 },  { UINT64_C(900000000), -1000 },  { UINT64_C(1200000000), -2100 },
-        { UINT64_C(1450000000), -1600 }, { UINT64_C(1600000000), -800 },  { UINT64_C(1850000000), -1000 },
-        { UINT64_C(2100000000), -2200 }, { UINT64_C(2360000000), -700 },  { UINT64_C(2600000000), -1900 },
-        { UINT64_C(2800000000), -1000 }, { UINT64_C(3100000000), -2200 }, { UINT64_C(3500000000), -900 },
-        { UINT64_C(3900000000), -1800 }, { UINT64_C(4300000000), -1200 }, { UINT64_C(4700000000), -2100 },
-        { UINT64_C(5100000000), -800 },  { UINT64_C(5500000000), -1900 }, { UINT64_C(5800000000), -700 },
-        { UINT64_C(6000000000), -1600 }
-    };
-    size_t index;
-    if (frequency_hz <= profile[0].frequency_hz)
-        return profile[0].power_cdbfs;
-    for (index = 1; index < sizeof(profile) / sizeof(profile[0]); ++index)
-    {
-        if (frequency_hz <= profile[index].frequency_hz)
-        {
-            uint64_t left_hz = profile[index - 1].frequency_hz;
-            uint64_t span_hz = profile[index].frequency_hz - left_hz;
-            int32_t power_delta = (int32_t)profile[index].power_cdbfs - profile[index - 1].power_cdbfs;
-            int64_t interpolated = (int64_t)profile[index - 1].power_cdbfs
-                                   + (int64_t)power_delta * (int64_t)(frequency_hz - left_hz) / (int64_t)span_hz;
-            return (int16_t)interpolated;
-        }
-    }
-    return profile[sizeof(profile) / sizeof(profile[0]) - 1].power_cdbfs;
-}
-
-static int capture_stub_iq(ScannerRadioFrontend *frontend, uint16_t complex_pairs, uint8_t *output,
-                           size_t output_capacity, size_t *output_size, uint8_t *sample_format)
-{
-    size_t index;
-    size_t required_size = (size_t)complex_pairs * 2u;
-    static const int8_t fixed_iq_cycle[] = { 1, 1, -1, 1, -1, -1, 1, -1 };
-    int16_t target_power_cdbfs;
-    long double target_dbfs;
-    long double base_dbfs;
-    long double amplitude_scale;
-    int64_t amplitude;
-    if (output_capacity < required_size || !frontend->frequency_configured || !frontend->sample_rate_configured
-        || !frontend->bandwidth_configured || !frontend->lna_gain_configured || !frontend->vga_gain_configured)
-        return 0;
-
-    target_power_cdbfs = stub_target_power_cdbfs(frontend->configured_frequency_hz);
-    target_dbfs = (long double)target_power_cdbfs / 100.0L;
-    base_dbfs = 20.0L * log10l(74.0L / 128.0L);
-    amplitude_scale = powl(10.0L, (target_dbfs - base_dbfs) / 20.0L);
-    amplitude = llroundl(74.0L * amplitude_scale);
-    for (index = 0; index < required_size; ++index)
-        output[index] = (uint8_t)(int8_t)(fixed_iq_cycle[index % sizeof(fixed_iq_cycle)] * amplitude);
-    *output_size = required_size;
-    *sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
-    return 1;
-}
-
 int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
                              size_t output_capacity, size_t *output_size, uint8_t *sample_format,
                              unsigned int timeout_ms)
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
-    size_t bytes_per_pair;
     size_t required_size;
     if (frontend == NULL || output == NULL || output_size == NULL || sample_format == NULL || complex_pairs == 0
         || complex_pairs > SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS || timeout_ms == 0 || !frontend->frequency_configured
         || !frontend->sample_rate_configured || !frontend->bandwidth_configured)
         return 0;
 
-    bytes_per_pair = frontend->iq_sample_format == SCANNER_RADIO_IQ_FORMAT_S16 ? 4u : 2u;
-    required_size = (size_t)complex_pairs * bytes_per_pair;
+    required_size = (size_t)complex_pairs * (frontend->iq_sample_format == SCANNER_RADIO_IQ_FORMAT_S16 ? 4u : 2u);
     if (output_capacity < required_size)
         return 0;
     *output_size = 0;
 
-    if (frontend->backend == SCANNER_RADIO_BACKEND_STUB)
-        return capture_stub_iq(frontend, complex_pairs, output, output_capacity, output_size, sample_format);
-
-    if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
+    switch (frontend->backend)
     {
-#ifdef SCANNER_HAVE_HACKRF
-        HackrfCaptureContext context;
-        unsigned int waited_ms;
-        int stop_result;
-        size_t bytes_written;
-        if (channel != 0 || frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S8)
-            return 0;
-        if (!hackrf_context_init(&context))
-            return 0;
-        context.output = output;
-        context.capacity = required_size;
-        context.bytes_written = 0;
-        if (hackrf_start_rx((hackrf_device *)frontend->device_handle, hackrf_capture_callback, &context)
-            != HACKRF_SUCCESS)
-        {
-            hackrf_context_destroy(&context);
-            return 0;
-        }
-        for (waited_ms = 0; waited_ms < timeout_ms; ++waited_ms)
-        {
-            int capture_complete;
-            hackrf_context_lock(&context);
-            capture_complete = context.bytes_written >= context.capacity;
-            hackrf_context_unlock(&context);
-            if (capture_complete)
-                break;
-#ifdef _WIN32
-            Sleep(1);
-#else
-            {
-                struct timespec delay = { 0, 1000000L };
-                nanosleep(&delay, NULL);
-            }
-#endif
-            if (hackrf_is_streaming((hackrf_device *)frontend->device_handle) != HACKRF_TRUE && !capture_complete)
-                break;
-        }
-        stop_result = hackrf_stop_rx((hackrf_device *)frontend->device_handle);
-        hackrf_context_lock(&context);
-        bytes_written = context.bytes_written;
-        hackrf_context_unlock(&context);
-        hackrf_context_destroy(&context);
-        if (bytes_written != context.capacity || stop_result != HACKRF_SUCCESS)
-            return 0;
-        *output_size = bytes_written;
-        *sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
-        return 1;
-#else
+    case SCANNER_RADIO_BACKEND_STUB:
+        return scanner_radio_capture_stub(frontend, complex_pairs, output, output_size, sample_format);
+    case SCANNER_RADIO_BACKEND_HACKRF:
+        return scanner_radio_capture_hackrf(frontend, channel, complex_pairs, output, required_size,
+                                            output_size, sample_format, timeout_ms);
+    case SCANNER_RADIO_BACKEND_BLADERF:
+        return scanner_radio_capture_bladerf(frontend, channel, complex_pairs, output, required_size,
+                                             output_size, sample_format, timeout_ms);
+    default:
         return 0;
-#endif
     }
-
-    if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
-    {
-#ifdef SCANNER_HAVE_BLADERF
-        unsigned int channel_count = frontend->rx_channels;
-        size_t raw_sample_count;
-        size_t pair_index;
-        int16_t *raw;
-        struct bladerf *device = (struct bladerf *)frontend->device_handle;
-        bladerf_channel_layout layout;
-        int result;
-        if (frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S16 || channel_count == 0)
-            return 0;
-        layout = channel_count > 1 ? BLADERF_RX_X2 : BLADERF_RX_X1;
-        raw_sample_count = complex_pairs;
-        if (!ensure_capture_buffer(frontend))
-            return 0;
-        raw = (int16_t *)frontend->capture_buffer;
-        if (bladerf_sync_config(device, layout, BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, timeout_ms) != 0)
-            return 0;
-        if (channel_count > 1)
-        {
-            if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0
-                || bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), true) != 0)
-            {
-                bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), false);
-                bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), false);
-                return 0;
-            }
-        }
-        else if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0)
-        {
-            return 0;
-        }
-        {
-            struct bladerf_metadata metadata;
-            memset(&metadata, 0, sizeof(metadata));
-            result = bladerf_sync_rx(device, raw, (unsigned int)raw_sample_count, &metadata, timeout_ms);
-        }
-        for (pair_index = 0; pair_index < channel_count; ++pair_index)
-            bladerf_enable_module(device, BLADERF_CHANNEL_RX((unsigned int)pair_index), false);
-        if (result != 0)
-        {
-            return 0;
-        }
-        for (pair_index = 0; pair_index < complex_pairs; ++pair_index)
-        {
-            size_t source_index = (pair_index * channel_count + channel) * 2u;
-            size_t dest_index = pair_index * 4u;
-            uint16_t i_value = (uint16_t)raw[source_index];
-            uint16_t q_value = (uint16_t)raw[source_index + 1u];
-            output[dest_index] = (uint8_t)(i_value & 0xffu);
-            output[dest_index + 1u] = (uint8_t)(i_value >> 8);
-            output[dest_index + 2u] = (uint8_t)(q_value & 0xffu);
-            output[dest_index + 3u] = (uint8_t)(q_value >> 8);
-        }
-        *output_size = required_size;
-        *sample_format = SCANNER_RADIO_IQ_FORMAT_S16;
-        return 1;
-#else
-        return 0;
-#endif
-    }
-    return 0;
 }
 
 int scanner_radio_prepare_capture_buffer(ScannerRadioInventory *inventory, uint8_t channel)
@@ -1111,11 +849,7 @@ int scanner_radio_prepare_capture_buffer(ScannerRadioInventory *inventory, uint8
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || frontend->backend != SCANNER_RADIO_BACKEND_BLADERF)
         return 0;
-#ifdef SCANNER_HAVE_BLADERF
-    return frontend->rx_channels > 0 && frontend->rx_channels <= 2 && ensure_capture_buffer(frontend);
-#else
-    return 0;
-#endif
+    return scanner_radio_prepare_bladerf_capture(frontend);
 }
 
 int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
