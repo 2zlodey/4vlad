@@ -31,6 +31,9 @@ uint32_t BAD=0;
 uint32_t GOOD=0;
 uint32_t SENDED=0;
 
+const uint16_t HSSizeSnt=626;
+const uint16_t HSSizeRcv=52;
+
 
 struct timeval timeTMP;
 void cl(char * text){
@@ -47,9 +50,19 @@ typedef struct {
     long int TSN; //timestamp
     uint16_t port; // UDP PORT for response
     Device dev; //структура с описанием девайса из джейсона
-//    keyPublic;
-} HandShake;
+//    uint8_t keyPub[256];
+} HandShake_t;
+
+typedef struct {
+    uint8_t key[32];
+    uint8_t nonce[12];
+    uint64_t ts;
+} HSAnswer_t;
 #pragma pack(pop)
+
+  HSAnswer_t hsAnswer ={};
+//  hsAnswer.ts=1;
+
 
 double outcounter=0;
 
@@ -75,10 +88,10 @@ int udp_send(int sock, const unsigned char *buffer, size_t size, const struct so
 /////////////////////////////////////////////////////////
 // ОСНОВНАЯ ФУНКЦИЯ UDP-отправки заголовочного пакета
 /////////////////////////////////////////////////////////
-int sendHS(const HandShake *dev) {
+int sendHS(const HandShake_t *dev) {
     unsigned char buffer[UDP_BUFFER_SIZE];
     // Копируем Device в буфер
-    memcpy(buffer, dev, sizeof(HandShake));
+    memcpy(buffer, dev, sizeof(HandShake_t));
 
     struct sockaddr_in local_addr;
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -117,7 +130,7 @@ int sendHS(const HandShake *dev) {
         printf("Попытка подключения %d из %d\n", tryCount, tryConnectToServer);
         // Отправляем HS
         SENDED++;
-        if (udp_send(sock, buffer, sizeof(HandShake), &server_addr) != 0) {
+        if (udp_send(sock, buffer, sizeof(HandShake_t), &server_addr) != 0) {
             fprintf(stderr, "Ошибка отправки Device\n");
             cl("! Error of send HS");
             close(sock);
@@ -133,15 +146,18 @@ int sendHS(const HandShake *dev) {
             close(sock);
             return -1;
         }
+
         unsigned char response[UDP_BUFFER_SIZE];
         struct sockaddr_in response_addr;
         socklen_t response_addr_len = sizeof(response_addr);
+
         ssize_t received = recvfrom(sock,response,
         sizeof(response),0, (struct sockaddr *)&response_addr, &response_addr_len);
-        if (received < 0){
+        if (received != HSSizeRcv){
+           cl("! Bad return size");
+
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 printf("Ответ не получен за 2 секунды\n");
-
                 if (tryCount >= tryConnectToServer) {
                     BAD++;
                     printf("Превышено число попыток подключения\n");
@@ -156,6 +172,8 @@ int sendHS(const HandShake *dev) {
             close(sock);
             return -1;
         }
+    memcpy(&hsAnswer, response, 52);
+
     // ОТВЕТ ПОЛУЧЕН
         GOOD++;
         printf("Сервер ответил. Получено %zd байт\n", received);
@@ -164,7 +182,6 @@ int sendHS(const HandShake *dev) {
     // ДАЛЬНЕЙШИЙ ДИАЛОГ
     printf("Переходим в режим диалога\n");
     close(sock);
-
     return 0;
 } ///end of function
 
@@ -275,50 +292,40 @@ cl("# наполнили фонаревыми данными ");
     
 
 //*********************************//
-    gettimeofday(&timeTMP, NULL);
+  gettimeofday(&timeTMP, NULL);
 
-    HandShake hsOriginal={
+  HandShake_t hsOriginal={
     .cnt=outcounter,
     .TSS=timeTMP.tv_sec,
     .TSN=timeTMP.tv_usec,
     .port=CLIENT_PORT,
     .dev=fromINI
-    };
+  };
+
 //***********************************
-    cl("i HandShake ready to send");
-    printf("size HS= %zu\n",sizeof(hsOriginal));
+  gettimeofday(&timeTMP, NULL);
+  long long int startTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
+  printf("size HS= %zu\n",sizeof(hsOriginal));
+   
+  if (sizeof(hsOriginal)!=HSSizeSnt)   cl("! HandShake OUT size ERROR");
+  else {
+    if (sendHS(&hsOriginal) != 0) cl( "UDP-диалог завершён c ошибкой");
+    else cl("i HandShake sended and answer recived");
+  }
 
-//////***************************************************************///
 
 
-gettimeofday(&timeTMP, NULL);
-long long int startTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
+  cl(" <-- END TIME");
+  printf("\n\nSENDED: %d GOOD:%d BAD:%d\n",SENDED,GOOD,BAD);
+  printf("Start:%lld\n",startTime);
+  gettimeofday(&timeTMP, NULL);
+  long long int endTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
+  printf("End:%lld\n",endTime);
+  printf("delta:%lld\n",endTime-startTime);
 
-cl(" ------Start loop");
-int LOOP=3;
-while (LOOP--){
-    hsOriginal.cnt++;
-    if (sendHS(&hsOriginal) != 0) {
-        fprintf(stderr, "UDP-диалог завершён c ошибкой\n");
-          LOOP=0;
-//        return 1;
-    } else {
-        cl("i HandShake sended and answer recived");
-        printf("LOOP:%d\n",LOOP);
-    }
-}
-cl(" <-- END TIME");
-printf("\n\nSENDED: %d GOOD:%d BAD:%d\n",SENDED,GOOD,BAD);
-
-printf("Start:%lld\n",startTime);
-
-gettimeofday(&timeTMP, NULL);
-long long int endTime =timeTMP.tv_sec*1000000+timeTMP.tv_usec;
-printf("End:%lld\n",endTime);
-printf("delta:%lld\n",endTime-startTime);
-
+  printf("Recive TS %lu\n",hsAnswer.ts);
 //printf ("End time %ld\n", timeTMP.tv_sec*1000000+timeTMP.tv_usec);
 
 
-    return 0;
+  return 0;
 } //end of main
