@@ -4,6 +4,7 @@
 #include "perf_probe.h"
 #include "protocol.h"
 #include "radio_frontend.h"
+#include "scanner_log.h"
 #include "signal_classifier.h"
 
 #include <inttypes.h>
@@ -16,11 +17,15 @@ static int store_worker_response(ScannerRadioWorkerResult *worker_result, const 
 {
     if (response_size == 0 || response_size > sizeof(worker_result->payload))
     {
+        LG('!', "Radio command completion failed: response encoding size=%lu", (unsigned long)response_size);
         snprintf(worker_result->error, sizeof(worker_result->error), "%s", "Could not encode radio command response");
         return 0;
     }
     memcpy(worker_result->payload, response, response_size);
     worker_result->size = response_size;
+    LG(response[5] == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+       "Radio command completed command=%u status=%u response-bytes=%lu", (unsigned int)response[4],
+       (unsigned int)response[5], (unsigned long)response_size);
     return 1;
 }
 
@@ -39,7 +44,7 @@ static int capture_and_record(ScannerRadioCommandContext *app, ScannerRadioInven
     if (!scanner_iq_recording_write(app->iq_file, frontend, channel, complex_samples, *sample_format, iq, *iq_size,
                                     error, sizeof(error)))
     {
-        fprintf(stderr, "IQ recording failed: %s\n", error);
+        LG('!', "IQ recording failed: %s", error);
         return 0;
     }
     return 1;
@@ -58,31 +63,40 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
     char analysis_error[160];
     if (app == NULL || app->analysis_worker == NULL || noise_floor_cdbfs == NULL
         || !capture_and_record(app, inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format))
+    {
+        LG('!', "Window analysis failed: missing analysis context or capture channel=%u", (unsigned int)channel);
         return 0;
+    }
     frontend = scanner_radio_active(inventory);
     if (frontend == NULL || scanner_radio_get_sample_rate(inventory, channel, &sample_rate_hz) != 1)
+    {
+        LG('!', "Window analysis failed: active frontend or sample rate unavailable channel=%u", (unsigned int)channel);
         return 0;
+    }
     if (radio_format == SCANNER_RADIO_IQ_FORMAT_S8)
         dsp_format = SCANNER_DSP_IQ_FORMAT_S8;
     else if (radio_format == SCANNER_RADIO_IQ_FORMAT_S16)
         dsp_format = SCANNER_DSP_IQ_FORMAT_S16_Q11;
     else
+    {
+        LG('!', "Window analysis failed: unsupported IQ format=%u", (unsigned int)radio_format);
         return 0;
+    }
 
     /* Send an owned bounded copy to analysis; radio handles stay in the radio worker. */
     if (!scanner_analysis_worker_analyze(app->analysis_worker, iq, iq_size, complex_pairs, dsp_format, sample_rate_hz,
                                          fft_size, 8.0, 2, analysis_result, analysis_error, sizeof(analysis_error)))
     {
-        fprintf(stderr, "DSP analysis failed: %s\n", analysis_error);
+        LG('!', "DSP analysis failed: %s", analysis_error);
         return 0;
     }
 
     /* Keep the legacy server field in window-power dBFS; PSD floor is analysis metadata. */
     *noise_floor_cdbfs = analysis_result->mean_window_power_cdbfs;
-    printf("DSP class=%s confidence=%.2f peak-offset=%+.0f Hz occupied-BW=%.0f Hz PSD-floor=%.2f dBFS/Hz\n",
-           scanner_signal_class_name(analysis_result->classification.signal_class),
-           analysis_result->classification.confidence, analysis_result->features.peak_offset_hz,
-           analysis_result->features.occupied_bandwidth_hz, analysis_result->features.noise_floor_dbfs_per_hz);
+    LG('*', "DSP class=%s confidence=%.2f peak-offset=%+.0f Hz occupied-BW=%.0f Hz PSD-floor=%.2f dBFS/Hz",
+       scanner_signal_class_name(analysis_result->classification.signal_class),
+       analysis_result->classification.confidence, analysis_result->features.peak_offset_hz,
+       analysis_result->features.occupied_bandwidth_hz, analysis_result->features.noise_floor_dbfs_per_hz);
     return 1;
 }
 
@@ -113,6 +127,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                                 frontends_request.request_id, inventory);
         if (response_size == 0)
         {
+            LG('!', "Radio frontend query %" PRIu32 " failed: capabilities encoding", frontends_request.request_id);
             snprintf(worker_result->error, sizeof(worker_result->error), "%s",
                      "Could not encode radio frontend capabilities");
             worker_result->fatal = 1;
@@ -120,8 +135,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         }
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        printf("Radio frontend query %" PRIu32 " answered: %lu frontend(s), active=%u\n", frontends_request.request_id,
-               (unsigned long)inventory->count, (unsigned int)inventory->active_id);
+        LG('+', "Radio frontend query %" PRIu32 " answered: %lu frontend(s), active=%u", frontends_request.request_id,
+           (unsigned long)inventory->count, (unsigned int)inventory->active_id);
         return 1;
     }
 
@@ -133,8 +148,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                                  inventory->active_id);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        printf("Active radio selection %" PRIu32 ": frontend=%u status=%u\n", select_request.request_id,
-               (unsigned int)select_request.frontend_id, (unsigned int)status);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!', "Active radio selection %" PRIu32 ": frontend=%u status=%u",
+           select_request.request_id, (unsigned int)select_request.frontend_id, (unsigned int)status);
         return 1;
     }
 
@@ -160,9 +175,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                           set_frequency_request.channel, actual_frequency_hz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        printf("Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%" PRIu64 " Hz\n",
-               set_frequency_request.request_id, (unsigned int)set_frequency_request.channel,
-               (unsigned int)set_frequency_request.frequency_khz, (unsigned int)status, actual_frequency_hz);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%" PRIu64 " Hz",
+           set_frequency_request.request_id, (unsigned int)set_frequency_request.channel,
+           (unsigned int)set_frequency_request.frequency_khz, (unsigned int)status, actual_frequency_hz);
         return 1;
     }
 
@@ -189,9 +205,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                           get_frequency_request.channel, frequency_hz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        printf("Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz\n",
-               get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
-               frequency_hz);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz",
+           get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
+           frequency_hz);
         return 1;
     }
 
@@ -216,8 +233,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                             set_u32_request.channel, actual_hz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        printf("Set sample rate id=%" PRIu32 " status=%u applied=%u Hz\n", set_u32_request.request_id,
-               (unsigned int)status, (unsigned int)actual_hz);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Set sample rate id=%" PRIu32 " channel=%u requested=%u Hz status=%u applied=%u Hz",
+           set_u32_request.request_id, (unsigned int)set_u32_request.channel, (unsigned int)set_u32_request.value,
+           (unsigned int)status, (unsigned int)actual_hz);
         return 1;
     }
 
@@ -244,6 +263,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         response_size = scanner_encode_u32_setting_response(response, get_value_request.request_id,
                                                             SCANNER_GET_SAMPLE_RATE_COMMAND, status,
                                                             get_value_request.channel, value_hz);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Get sample rate id=%" PRIu32 " channel=%u status=%u value=%u Hz", get_value_request.request_id,
+           (unsigned int)get_value_request.channel, (unsigned int)status, (unsigned int)value_hz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -268,6 +290,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
                                                             SCANNER_SET_BANDWIDTH_COMMAND, status,
                                                             set_u32_request.channel, actual_hz);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Set bandwidth id=%" PRIu32 " channel=%u requested=%u Hz status=%u applied=%u Hz",
+           set_u32_request.request_id, (unsigned int)set_u32_request.channel, (unsigned int)set_u32_request.value,
+           (unsigned int)status, (unsigned int)actual_hz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -302,6 +328,11 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         }
         response_size = scanner_encode_gain_stage_response(response, set_gain_request.request_id, command, status,
                                                            set_gain_request.channel, actual_db);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Set %s gain id=%" PRIu32 " channel=%u requested=%u dB status=%u applied=%u dB",
+           stage == SCANNER_RADIO_GAIN_LNA ? "LNA" : "VGA", set_gain_request.request_id,
+           (unsigned int)set_gain_request.channel, (unsigned int)set_gain_request.gain_db, (unsigned int)status,
+           (unsigned int)actual_db);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -329,6 +360,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         }
         response_size = scanner_encode_gain_response(response, get_value_request.request_id, status,
                                                      get_value_request.channel, gain_cdb);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!', "Get gain id=%" PRIu32 " channel=%u status=%u value=%d cdb",
+           get_value_request.request_id, (unsigned int)get_value_request.channel, (unsigned int)status, (int)gain_cdb);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -359,6 +392,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         }
         response_size = scanner_encode_gain_stages_response(response, get_value_request.request_id, status,
                                                             get_value_request.channel, lna_db, vga_db);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Get gain stages id=%" PRIu32 " channel=%u status=%u LNA=%d dB VGA=%d dB", get_value_request.request_id,
+           (unsigned int)get_value_request.channel, (unsigned int)status, (int)lna_db, (int)vga_db);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -382,6 +418,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
                                                       SCANNER_MEASURE_CURRENT_COMMAND, status,
                                                       get_value_request.channel, noise_floor_cdbfs);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Measure current id=%" PRIu32 " channel=%u status=%u power=%d cdbfs", get_value_request.request_id,
+           (unsigned int)get_value_request.channel, (unsigned int)status, (int)noise_floor_cdbfs);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -409,6 +448,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         response_size = scanner_encode_power_response(response, measure_frequency_request.request_id,
                                                       SCANNER_MEASURE_FREQUENCY_COMMAND, status,
                                                       measure_frequency_request.channel, noise_floor_cdbfs);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Measure frequency id=%" PRIu32 " channel=%u requested=%u kHz status=%u power=%d cdbfs",
+           measure_frequency_request.request_id, (unsigned int)measure_frequency_request.channel,
+           (unsigned int)measure_frequency_request.frequency_khz, (unsigned int)status, (int)noise_floor_cdbfs);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -417,6 +460,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     /* SWEEP returns one DSP-estimated noise-floor level per tuned frequency. */
     if (scanner_decode_sweep_request(datagram->payload, datagram->size, &sweep_request))
     {
+        LG('i', "Sweep id=%" PRIu32 " channel=%u start=%u stop=%u step=%u kHz", sweep_request.request_id,
+           (unsigned int)sweep_request.channel, (unsigned int)sweep_request.start_khz,
+           (unsigned int)sweep_request.stop_khz, (unsigned int)sweep_request.step_khz);
         uint32_t frequencies[SCANNER_MAX_SWEEP_POINTS];
         int16_t noise_floors_cdbfs[SCANNER_MAX_SWEEP_POINTS];
         uint16_t count = 0;
@@ -449,6 +495,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                 uint32_t rounded_khz;
                 if (scanner_radio_worker_current_cancelled(worker))
                 {
+                    LG('!', "Sweep id=%" PRIu32 " cancelled at %" PRIu64 " kHz", sweep_request.request_id, current_khz);
                     status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
                     count = 0;
                     break;
@@ -471,6 +518,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         }
         response_size = scanner_encode_sweep_response(response, sizeof(response), sweep_request.request_id, status,
                                                       sweep_request.channel, count, frequencies, noise_floors_cdbfs);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!', "Sweep id=%" PRIu32 " status=%u points=%u",
+           sweep_request.request_id, (unsigned int)status, (unsigned int)count);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -503,9 +552,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                         status == SCANNER_RADIO_STATUS_OK ? (uint32_t)iq_size : 0);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
-        if (status == SCANNER_RADIO_STATUS_OK)
-            printf("Saved IQ capture: %u complex samples, %lu bytes\n", (unsigned int)raw_iq_request.complex_pairs,
-                   (unsigned long)iq_size);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Save IQ id=%" PRIu32 " channel=%u status=%u samples=%u bytes=%lu", raw_iq_request.request_id,
+           (unsigned int)raw_iq_request.channel, (unsigned int)status, (unsigned int)raw_iq_request.complex_pairs,
+           (unsigned long)iq_size);
         return 1;
     }
 
@@ -532,6 +582,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                                                          : 0,
                                                        status == SCANNER_RADIO_STATUS_OK ? iq : NULL,
                                                        status == SCANNER_RADIO_STATUS_OK ? iq_size : 0);
+        LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
+           "Raw IQ id=%" PRIu32 " channel=%u status=%u samples=%u bytes=%lu", raw_iq_request.request_id,
+           (unsigned int)raw_iq_request.channel, (unsigned int)status, (unsigned int)raw_iq_request.complex_pairs,
+           (unsigned long)iq_size);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -543,10 +597,10 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         worker_result->close_after_send = 1;
-        printf("Exit command %" PRIu32 " acknowledged; shutting down\n", exit_request.request_id);
+        LG('i', "Exit command %" PRIu32 " acknowledged; shutting down", exit_request.request_id);
         return 2;
     }
 
-    fprintf(stderr, "Ignoring malformed or unsupported radio command\n");
+    LG('!', "Ignoring malformed or unsupported radio command");
     return 1;
 }

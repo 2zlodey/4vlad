@@ -27,6 +27,7 @@ typedef struct
 {
     ScannerSocket handle;
     int winsock_started;
+    int log_command_frames;
 } ScannerUdpSocket;
 
 int scanner_udp_open(ScannerUdpSocket *socket_handle, char *error, size_t error_size);

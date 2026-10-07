@@ -2,6 +2,29 @@
 
 Portable C99 UDP client that performs the DemoServer handshake, answers VER, exposes generic radio frontend capabilities, configures RX, and returns bounded I/Q and power measurements. BladeRF and HackRF support is optional and enabled when their development libraries are available at build time.
 
+## Logging
+
+Use `--debug N` (default `1`):
+
+| Mode | Destination |
+| --- | --- |
+| `0` | Startup only; fatal application errors still go to stderr. |
+| `1` | Events on the console. |
+| `2` | TXT file; console only shows startup and fatal errors. |
+| `3` | HTML file; same events as TXT, with escaped text and `<br>` at the end of every line. Console only shows startup and fatal errors. |
+
+Files are created in the current working directory as `scanner_YYYYMMDD_HHMMSS_PID_SEQUENCE.txt` or `.html`. The startup message includes the path. Each line uses local time and the format `YYYY-MM-DD:HH:MM:SS MARKER [module.c] message`. Markers are `!` errors, `i` important information, `<` incoming data, `>` outgoing data, and `*`, `+`, `-`, `#`, `&`, `@` neutral events. The `****` separator is not printed. A mutex serializes complete lines from different threads; file output is flushed after each event.
+
+Discovery/init/open/close operations, radio settings and capture, DSP results, handshake/VER/retries, command completion statuses, UDP receive/send and IQ recording events are logged. Packet logs include endpoint, byte count, request ID/opcode/status when applicable, and hex commands/responses. Raw IQ response logs contain only the 10-byte metadata header; sample payloads are omitted. Capture logging is per window, never per sample. Startup and fatal errors are also recorded in file modes. Unrecoverable application failures exit nonzero; external termination or a process crash cannot guarantee a final log entry.
+
+```sh
+./build-pi/scanner_node --device-json ../device.json --debug 2
+./build-pi/scanner_node --device-json ../device.json --debug 3
+python3 tools/logging_e2e_test.py --client ./build-pi/scanner_node --device-json ../device.json
+```
+
+For code, use `LG('+', "Operation completed value=%u", value)`; module names are taken from `__FILE__`. Use `LGF(...)` for errors that terminate the application. `--help` explicitly prints usage regardless of the chosen logging mode.
+
 ## Network flow
 
 1. Load and validate a device description JSON file with exactly 16 antenna entries.

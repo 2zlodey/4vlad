@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--device-json", default="../device.json", help="valid device JSON")
     parser.add_argument("--frontend-id", type=int, default=0, help="frontend to select")
     parser.add_argument("--timeout", type=float, default=90.0, help="overall client timeout in seconds")
+    parser.add_argument("--debug", type=int, choices=range(4), default=1, help="scanner logging mode")
     args = parser.parse_args()
     if not 0 <= args.frontend_id <= 255:
         parser.error("--frontend-id must be between 0 and 255")
@@ -93,21 +94,28 @@ def main():
         "3000",
         "--ver-timeout",
         "3000",
+        "--debug",
+        str(args.debug),
     ]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     timed_out = False
     try:
         deadline = time.monotonic() + args.timeout
-        while process.poll() is None:
+        while True:
             if errors:
                 process.kill()
+                stdout, stderr = process.communicate()
                 break
             if time.monotonic() >= deadline:
                 timed_out = True
                 process.kill()
+                stdout, stderr = process.communicate()
                 break
-            time.sleep(0.05)
-        stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(timeout=0.05)
+                break
+            except subprocess.TimeoutExpired:
+                continue
     finally:
         if process.poll() is None:
             process.kill()

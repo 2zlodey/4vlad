@@ -6,7 +6,9 @@
 
 #include "dsp.h"
 #include "radio_capture_backend.h"
+#include "scanner_log.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,19 +76,26 @@ static void discover_bladerf(ScannerRadioInventory *inventory)
 
     device_count = bladerf_get_device_list(&devices);
     if (device_count <= 0 || devices == NULL)
+    {
+        LG(device_count < 0 ? '!' : '*', "BladeRF discovery found no usable devices status=%d", device_count);
         return;
+    }
+    LG('*', "BladeRF discovery found %d device(s)", device_count);
 
     if (inventory->count >= SCANNER_RADIO_MAX_FRONTENDS || bladerf_open_with_devinfo(&device, &devices[0]) != 0)
     {
+        LG('!', "BladeRF discovery could not open device or inventory is full");
         bladerf_free_device_list(devices);
         return;
     }
+    LG('+', "BladeRF discovery opened device index=0");
 
     if (bladerf_get_frequency_range(device, BLADERF_CHANNEL_RX(0), &frequency) != 0
         || bladerf_get_sample_rate_range(device, BLADERF_CHANNEL_RX(0), &sample_rate) != 0
         || bladerf_get_bandwidth_range(device, BLADERF_CHANNEL_RX(0), &bandwidth) != 0
         || bladerf_get_gain_range(device, BLADERF_CHANNEL_RX(0), &gain) != 0)
     {
+        LG('!', "BladeRF discovery capability query failed; closing handle");
         bladerf_close(device);
         bladerf_free_device_list(devices);
         return;
@@ -123,6 +132,8 @@ static void discover_bladerf(ScannerRadioInventory *inventory)
     frontend->sample_resolution_bits = 12;
     frontend->iq_sample_format = SCANNER_RADIO_IQ_FORMAT_S16;
     gain_mode_count = bladerf_get_gain_modes(device, BLADERF_CHANNEL_RX(0), &gain_modes);
+    if (gain_mode_count < 0)
+        LG('!', "BladeRF gain mode query failed status=%d", gain_mode_count);
     for (mode_index = 0; mode_index < gain_mode_count && gain_modes != NULL; ++mode_index)
     {
         if (gain_modes[mode_index].mode != BLADERF_GAIN_MGC)
@@ -132,6 +143,8 @@ static void discover_bladerf(ScannerRadioInventory *inventory)
     snprintf(frontend->name, sizeof(frontend->name), "%s", bladerf_get_board_name(device));
     inventory->count++;
 
+    LG('+', "Discovered BladeRF frontend=%u name=%s; closing discovery handle", (unsigned int)frontend->id,
+       frontend->name);
     bladerf_close(device);
     bladerf_free_device_list(devices);
 }
@@ -147,20 +160,34 @@ static void discover_hackrf(ScannerRadioInventory *inventory)
     int index;
 
     if (hackrf_init() != HACKRF_SUCCESS)
+    {
+        LG('!', "HackRF discovery initialization failed");
         return;
+    }
+    LG('+', "HackRF discovery initialized");
     initialized = 1;
     devices = hackrf_device_list();
     if (devices == NULL)
+    {
+        LG('!', "HackRF discovery device list failed");
         goto cleanup;
+    }
+    LG('*', "HackRF discovery found %d device(s)", devices->devicecount);
 
     for (index = 0; index < devices->devicecount && inventory->count < SCANNER_RADIO_MAX_FRONTENDS; ++index)
     {
         ScannerRadioFrontend *frontend;
         if (hackrf_device_list_open(devices, index, &device) != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF discovery open failed index=%d", index);
             continue;
+        }
+        LG('+', "HackRF discovery opened index=%d", index);
         if (hackrf_board_id_read(device, &board_id) != HACKRF_SUCCESS)
         {
-            hackrf_close(device);
+            LG('!', "HackRF board ID query failed index=%d; closing handle", index);
+            if (hackrf_close(device) != HACKRF_SUCCESS)
+                LG('!', "HackRF discovery handle close failed index=%d", index);
             device = NULL;
             continue;
         }
@@ -199,16 +226,26 @@ static void discover_hackrf(ScannerRadioInventory *inventory)
         frontend->antenna_paths = 1;
         snprintf(frontend->name, sizeof(frontend->name), "%s", hackrf_board_id_name((enum hackrf_board_id)board_id));
         inventory->count++;
-        hackrf_close(device);
+        LG('+', "Discovered HackRF frontend=%u name=%s; closing discovery handle", (unsigned int)frontend->id,
+           frontend->name);
+        if (hackrf_close(device) != HACKRF_SUCCESS)
+            LG('!', "HackRF discovery handle close failed index=%d", index);
         device = NULL;
     }
     hackrf_device_list_free(devices);
 
 cleanup:
     if (device != NULL)
-        hackrf_close(device);
+    {
+        LG('*', "Closing HackRF discovery handle");
+        if (hackrf_close(device) != HACKRF_SUCCESS)
+            LG('!', "HackRF discovery cleanup close failed");
+    }
     if (initialized)
+    {
         hackrf_exit();
+        LG('*', "HackRF discovery shut down");
+    }
 }
 #endif
 
@@ -218,7 +255,10 @@ int scanner_radio_add_stub(ScannerRadioInventory *inventory)
     ScannerRadioFrontend *frontend;
 
     if (inventory == NULL || inventory->count >= SCANNER_RADIO_MAX_FRONTENDS)
+    {
+        LG('!', "Cannot add stub SDR: invalid inventory or inventory full");
         return 0;
+    }
 
     frontend = &inventory->frontends[inventory->count];
     memset(frontend, 0, sizeof(*frontend));
@@ -252,9 +292,11 @@ int scanner_radio_add_stub(ScannerRadioInventory *inventory)
     frontend->vga_gain_configured = 1;
     snprintf(frontend->name, sizeof(frontend->name), "%s", "Stub SDR (in-memory)");
     inventory->count++;
+    LG('+', "Added stub SDR frontend=%u", (unsigned int)frontend->id);
     return 1;
 #else
     (void)inventory;
+    LG('*', "Stub SDR fallback disabled");
     return 0;
 #endif
 }
@@ -262,8 +304,12 @@ int scanner_radio_add_stub(ScannerRadioInventory *inventory)
 void scanner_radio_discover(ScannerRadioInventory *inventory)
 {
     if (inventory == NULL)
+    {
+        LG('!', "Radio discovery failed: invalid inventory");
         return;
+    }
 
+    LG('i', "Radio discovery started");
     memset(inventory, 0, sizeof(*inventory));
     inventory->active_id = SCANNER_RADIO_ID_NONE;
 #ifdef SCANNER_HAVE_BLADERF
@@ -274,6 +320,7 @@ void scanner_radio_discover(ScannerRadioInventory *inventory)
 #endif
     if (inventory->count == 0)
         (void)scanner_radio_add_stub(inventory);
+    LG(inventory->count > 0 ? '+' : '!', "Radio discovery completed: %lu frontend(s)", (unsigned long)inventory->count);
 }
 
 static void release_capture_resources(ScannerRadioFrontend *frontend)
@@ -287,11 +334,16 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
     ScannerRadioFrontend *target = NULL;
     size_t index;
     if (inventory == NULL)
+    {
+        LG('!', "Radio selection failed: invalid inventory");
         return 0;
+    }
+    LG('i', "Selecting radio frontend=%u", (unsigned int)frontend_id);
 
     if (frontend_id == SCANNER_RADIO_ID_NONE)
     {
         scanner_radio_close_all(inventory);
+        LG('+', "Radio deselected");
         return 1;
     }
 
@@ -304,9 +356,15 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
         }
     }
     if (target == NULL)
+    {
+        LG('!', "Radio selection failed: frontend=%u not found", (unsigned int)frontend_id);
         return 0;
+    }
     if (inventory->active_id == frontend_id && target->device_handle != NULL)
+    {
+        LG('+', "Radio frontend=%u already selected", (unsigned int)frontend_id);
         return 1;
+    }
 
     for (index = 0; index < inventory->count; ++index)
     {
@@ -314,13 +372,18 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
         release_capture_resources(frontend);
         if (frontend->device_handle == NULL)
             continue;
+        LG('*', "Closing radio handle frontend=%u backend=%s for selection", (unsigned int)frontend->id,
+           scanner_radio_backend_name(frontend->backend));
 #ifdef SCANNER_HAVE_BLADERF
         if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
             bladerf_close((struct bladerf *)frontend->device_handle);
 #endif
 #ifdef SCANNER_HAVE_HACKRF
         if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
-            hackrf_close((hackrf_device *)frontend->device_handle);
+        {
+            if (hackrf_close((hackrf_device *)frontend->device_handle) != HACKRF_SUCCESS)
+                LG('!', "HackRF handle close failed frontend=%u", (unsigned int)frontend->id);
+        }
 #endif
         frontend->device_handle = NULL;
         frontend->configured_frequency_hz = 0;
@@ -343,7 +406,11 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
             open_status = bladerf_open_with_devinfo(&device, &devices[target->backend_index]);
         bladerf_free_device_list(devices);
         if (open_status != 0)
+        {
+            LG('!', "BladeRF open failed frontend=%u status=%d", (unsigned int)frontend_id, open_status);
             return 0;
+        }
+        LG('+', "BladeRF opened frontend=%u", (unsigned int)frontend_id);
         target->device_handle = device;
         {
             bladerf_frequency frequency;
@@ -351,9 +418,13 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
             {
                 target->configured_frequency_hz = frequency;
                 target->frequency_configured = 1;
+                LG('+', "BladeRF initial frequency=%" PRIu64 " Hz", (uint64_t)frequency);
             }
+            else
+                LG('!', "BladeRF initial frequency readback failed");
         }
 #else
+        LG('!', "BladeRF selection failed: backend disabled");
         return 0;
 #endif
     }
@@ -365,12 +436,17 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
         if (!inventory->hackrf_initialized)
         {
             if (hackrf_init() != HACKRF_SUCCESS)
+            {
+                LG('!', "HackRF selection initialization failed");
                 return 0;
+            }
             inventory->hackrf_initialized = 1;
+            LG('+', "HackRF selection initialized");
         }
         devices = hackrf_device_list();
         if (devices == NULL)
         {
+            LG('!', "HackRF selection device list failed; shutting down library");
             hackrf_exit();
             inventory->hackrf_initialized = 0;
             return 0;
@@ -380,15 +456,19 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
         hackrf_device_list_free(devices);
         if (device == NULL)
         {
+            LG('!', "HackRF open failed frontend=%u", (unsigned int)frontend_id);
             if (inventory->hackrf_initialized)
             {
                 hackrf_exit();
                 inventory->hackrf_initialized = 0;
+                LG('*', "HackRF library shut down after open failure");
             }
             return 0;
         }
         target->device_handle = device;
+        LG('+', "HackRF opened frontend=%u", (unsigned int)frontend_id);
 #else
+        LG('!', "HackRF selection failed: backend disabled");
         return 0;
 #endif
     }
@@ -402,14 +482,18 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
     else if (target->backend == SCANNER_RADIO_BACKEND_UNKNOWN)
     {
         inventory->active_id = frontend_id;
+        LG('i', "Selected unknown backend frontend=%u without device handle", (unsigned int)frontend_id);
         return 1;
     }
     else
     {
+        LG('!', "Radio selection failed: unsupported backend=%d", (int)target->backend);
         return 0;
     }
 
     inventory->active_id = frontend_id;
+    LG('+', "Selected radio frontend=%u backend=%s name=%s", (unsigned int)frontend_id,
+       scanner_radio_backend_name(target->backend), target->name);
     return 1;
 }
 
@@ -417,7 +501,10 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
 {
     size_t index;
     if (inventory == NULL)
+    {
+        LG('!', "Radio close failed: invalid inventory");
         return;
+    }
 
     for (index = 0; index < inventory->count; ++index)
     {
@@ -425,13 +512,18 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
         release_capture_resources(frontend);
         if (frontend->device_handle == NULL)
             continue;
+        LG('*', "Closing radio handle frontend=%u backend=%s", (unsigned int)frontend->id,
+           scanner_radio_backend_name(frontend->backend));
 #ifdef SCANNER_HAVE_BLADERF
         if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
             bladerf_close((struct bladerf *)frontend->device_handle);
 #endif
 #ifdef SCANNER_HAVE_HACKRF
         if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
-            hackrf_close((hackrf_device *)frontend->device_handle);
+        {
+            if (hackrf_close((hackrf_device *)frontend->device_handle) != HACKRF_SUCCESS)
+                LG('!', "HackRF handle close failed frontend=%u", (unsigned int)frontend->id);
+        }
 #endif
         frontend->device_handle = NULL;
         frontend->configured_frequency_hz = 0;
@@ -449,9 +541,11 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
     {
         hackrf_exit();
         inventory->hackrf_initialized = 0;
+        LG('*', "HackRF library shut down");
     }
 #endif
     inventory->active_id = SCANNER_RADIO_ID_NONE;
+    LG('+', "All radio handles closed");
 }
 
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory)
@@ -488,26 +582,41 @@ static int set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint
     ScannerRadioFrontend *frontend;
     uint64_t frequency_result = frequency_hz;
     if (inventory == NULL || (readback && actual_frequency_hz == NULL))
+    {
+        LG('!', "Tune failed: invalid arguments channel=%u requested=%" PRIu64 " Hz", (unsigned int)channel,
+           frequency_hz);
         return 0;
+    }
     frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
     if (frontend == NULL || frontend->device_handle == NULL || channel >= frontend->rx_channels
         || frequency_hz < frontend->frequency_min_hz || frequency_hz > frontend->frequency_max_hz)
+    {
+        LG('!', "Tune failed: inactive radio, invalid channel or frequency channel=%u requested=%" PRIu64 " Hz",
+           (unsigned int)channel, frequency_hz);
         return 0;
+    }
 
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
 #ifdef SCANNER_HAVE_BLADERF
         struct bladerf *device = (struct bladerf *)frontend->device_handle;
         if (bladerf_set_frequency(device, BLADERF_CHANNEL_RX(channel), frequency_hz) != 0)
+        {
+            LG('!', "BladeRF tune failed channel=%u requested=%" PRIu64 " Hz", (unsigned int)channel, frequency_hz);
             return 0;
+        }
         if (readback)
         {
             bladerf_frequency actual;
             if (bladerf_get_frequency(device, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+            {
+                LG('!', "BladeRF tune readback failed channel=%u", (unsigned int)channel);
                 return 0;
+            }
             frequency_result = actual;
         }
 #else
+        LG('!', "Tune failed: BladeRF backend disabled");
         return 0;
 #endif
     }
@@ -515,8 +624,12 @@ static int set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint
     {
 #ifdef SCANNER_HAVE_HACKRF
         if (channel != 0 || hackrf_set_freq((hackrf_device *)frontend->device_handle, frequency_hz) != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF tune failed channel=%u requested=%" PRIu64 " Hz", (unsigned int)channel, frequency_hz);
             return 0;
+        }
 #else
+        LG('!', "Tune failed: HackRF backend disabled");
         return 0;
 #endif
     }
@@ -525,6 +638,7 @@ static int set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint
     }
     else
     {
+        LG('!', "Tune failed: unsupported backend=%d", (int)frontend->backend);
         return 0;
     }
 
@@ -532,6 +646,8 @@ static int set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint
     frontend->frequency_configured = 1;
     if (readback)
         *actual_frequency_hz = frequency_result;
+    LG('+', "Tuned frontend=%u channel=%u requested=%" PRIu64 " Hz applied=%" PRIu64 " Hz readback=%d",
+       (unsigned int)frontend->id, (unsigned int)channel, frequency_hz, frequency_result, readback);
     return 1;
 }
 
@@ -550,29 +666,42 @@ int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channe
 {
     ScannerRadioFrontend *frontend;
     if (inventory == NULL || frequency_hz == NULL)
+    {
+        LG('!', "Get frequency failed: invalid arguments channel=%u", (unsigned int)channel);
         return 0;
+    }
     frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
     if (frontend == NULL || frontend->device_handle == NULL || channel >= frontend->rx_channels)
+    {
+        LG('!', "Get frequency failed: inactive radio or invalid channel=%u", (unsigned int)channel);
         return 0;
+    }
 
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
 #ifdef SCANNER_HAVE_BLADERF
         bladerf_frequency actual;
         if (bladerf_get_frequency((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+        {
+            LG('!', "BladeRF get frequency failed channel=%u", (unsigned int)channel);
             return 0;
+        }
         frontend->configured_frequency_hz = actual;
         frontend->frequency_configured = 1;
 #else
+        LG('!', "Get frequency failed: BladeRF backend disabled");
         return 0;
 #endif
     }
     else if (!frontend->frequency_configured)
     {
+        LG('!', "Get frequency failed: not configured channel=%u", (unsigned int)channel);
         return -1;
     }
 
     *frequency_hz = frontend->configured_frequency_hz;
+    LG('+', "Get frequency frontend=%u channel=%u value=%" PRIu64 " Hz", (unsigned int)frontend->id,
+       (unsigned int)channel, *frequency_hz);
     return 1;
 }
 
@@ -593,7 +722,11 @@ int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t chan
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || actual_hz == NULL || requested_hz < frontend->sample_rate_min_hz
         || requested_hz > frontend->sample_rate_max_hz)
+    {
+        LG('!', "Set sample rate failed: invalid radio, channel, output or range channel=%u requested=%u Hz",
+           (unsigned int)channel, (unsigned int)requested_hz);
         return 0;
+    }
 
     if (frontend->backend == SCANNER_RADIO_BACKEND_STUB)
     {
@@ -605,9 +738,14 @@ int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t chan
         if (bladerf_set_sample_rate((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel),
                                     requested_hz, actual_hz)
             != 0)
+        {
+            LG('!', "BladeRF set sample rate failed channel=%u requested=%u Hz", (unsigned int)channel,
+               (unsigned int)requested_hz);
             return 0;
+        }
         frontend->configured_sample_rate_hz = *actual_hz;
 #else
+        LG('!', "Set sample rate failed: BladeRF backend disabled");
         return 0;
 #endif
     }
@@ -616,17 +754,27 @@ int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t chan
 #ifdef SCANNER_HAVE_HACKRF
         if (channel != 0
             || hackrf_set_sample_rate((hackrf_device *)frontend->device_handle, (double)requested_hz) != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF set sample rate failed channel=%u requested=%u Hz", (unsigned int)channel,
+               (unsigned int)requested_hz);
             return 0;
+        }
         frontend->configured_sample_rate_hz = requested_hz;
 #else
+        LG('!', "Set sample rate failed: HackRF backend disabled");
         return 0;
 #endif
     }
     else
+    {
+        LG('!', "Set sample rate failed: unsupported backend=%d", (int)frontend->backend);
         return 0;
+    }
 
     frontend->sample_rate_configured = 1;
     *actual_hz = frontend->configured_sample_rate_hz;
+    LG('+', "Set sample rate frontend=%u channel=%u requested=%u Hz applied=%u Hz", (unsigned int)frontend->id,
+       (unsigned int)channel, (unsigned int)requested_hz, (unsigned int)*actual_hz);
     return 1;
 }
 
@@ -634,20 +782,31 @@ int scanner_radio_get_sample_rate(ScannerRadioInventory *inventory, uint8_t chan
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || sample_rate_hz == NULL)
+    {
+        LG('!', "Get sample rate failed: inactive radio, invalid channel or output channel=%u", (unsigned int)channel);
         return 0;
+    }
     if (!frontend->sample_rate_configured)
+    {
+        LG('!', "Get sample rate failed: not configured channel=%u", (unsigned int)channel);
         return -1;
+    }
 #ifdef SCANNER_HAVE_BLADERF
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
         unsigned int actual = 0;
         if (bladerf_get_sample_rate((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &actual)
             != 0)
+        {
+            LG('!', "BladeRF get sample rate failed channel=%u", (unsigned int)channel);
             return 0;
+        }
         frontend->configured_sample_rate_hz = actual;
     }
 #endif
     *sample_rate_hz = frontend->configured_sample_rate_hz;
+    LG('+', "Get sample rate frontend=%u channel=%u value=%u Hz", (unsigned int)frontend->id, (unsigned int)channel,
+       (unsigned int)*sample_rate_hz);
     return 1;
 }
 
@@ -657,7 +816,11 @@ int scanner_radio_set_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || actual_hz == NULL || requested_hz < frontend->bandwidth_min_hz
         || requested_hz > frontend->bandwidth_max_hz)
+    {
+        LG('!', "Set bandwidth failed: invalid radio, channel, output or range channel=%u requested=%u Hz",
+           (unsigned int)channel, (unsigned int)requested_hz);
         return 0;
+    }
     if (frontend->bandwidth_option_count > 0)
     {
         size_t index;
@@ -671,7 +834,11 @@ int scanner_radio_set_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
             }
         }
         if (!found)
+        {
+            LG('!', "Set bandwidth failed: unsupported option channel=%u requested=%u Hz", (unsigned int)channel,
+               (unsigned int)requested_hz);
             return 0;
+        }
     }
 
     if (frontend->backend == SCANNER_RADIO_BACKEND_STUB)
@@ -684,9 +851,14 @@ int scanner_radio_set_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
         if (bladerf_set_bandwidth((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), requested_hz,
                                   actual_hz)
             != 0)
+        {
+            LG('!', "BladeRF set bandwidth failed channel=%u requested=%u Hz", (unsigned int)channel,
+               (unsigned int)requested_hz);
             return 0;
+        }
         frontend->configured_bandwidth_hz = *actual_hz;
 #else
+        LG('!', "Set bandwidth failed: BladeRF backend disabled");
         return 0;
 #endif
     }
@@ -696,17 +868,27 @@ int scanner_radio_set_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
         if (channel != 0
             || hackrf_set_baseband_filter_bandwidth((hackrf_device *)frontend->device_handle, requested_hz)
                    != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF set bandwidth failed channel=%u requested=%u Hz", (unsigned int)channel,
+               (unsigned int)requested_hz);
             return 0;
+        }
         frontend->configured_bandwidth_hz = requested_hz;
 #else
+        LG('!', "Set bandwidth failed: HackRF backend disabled");
         return 0;
 #endif
     }
     else
+    {
+        LG('!', "Set bandwidth failed: unsupported backend=%d", (int)frontend->backend);
         return 0;
+    }
 
     frontend->bandwidth_configured = 1;
     *actual_hz = frontend->configured_bandwidth_hz;
+    LG('+', "Set bandwidth frontend=%u channel=%u requested=%u Hz applied=%u Hz", (unsigned int)frontend->id,
+       (unsigned int)channel, (unsigned int)requested_hz, (unsigned int)*actual_hz);
     return 1;
 }
 
@@ -714,19 +896,30 @@ int scanner_radio_get_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || bandwidth_hz == NULL)
+    {
+        LG('!', "Get bandwidth failed: inactive radio, invalid channel or output channel=%u", (unsigned int)channel);
         return 0;
+    }
     if (!frontend->bandwidth_configured)
+    {
+        LG('!', "Get bandwidth failed: not configured channel=%u", (unsigned int)channel);
         return -1;
+    }
 #ifdef SCANNER_HAVE_BLADERF
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
         unsigned int actual = 0;
         if (bladerf_get_bandwidth((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &actual) != 0)
+        {
+            LG('!', "BladeRF get bandwidth failed channel=%u", (unsigned int)channel);
             return 0;
+        }
         frontend->configured_bandwidth_hz = actual;
     }
 #endif
     *bandwidth_hz = frontend->configured_bandwidth_hz;
+    LG('+', "Get bandwidth frontend=%u channel=%u value=%u Hz", (unsigned int)frontend->id, (unsigned int)channel,
+       (unsigned int)*bandwidth_hz);
     return 1;
 }
 
@@ -737,7 +930,11 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
     uint8_t *stored_gain;
     uint8_t *configured;
     if (frontend == NULL || actual_db == NULL || (stage != SCANNER_RADIO_GAIN_LNA && stage != SCANNER_RADIO_GAIN_VGA))
+    {
+        LG('!', "Set gain failed: invalid radio, channel, stage or output channel=%u stage=%d requested=%u dB",
+           (unsigned int)channel, (int)stage, (unsigned int)requested_db);
         return 0;
+    }
     stored_gain = stage == SCANNER_RADIO_GAIN_LNA ? &frontend->configured_lna_gain_db
                                                   : &frontend->configured_vga_gain_db;
     configured = stage == SCANNER_RADIO_GAIN_LNA ? &frontend->lna_gain_configured : &frontend->vga_gain_configured;
@@ -746,7 +943,11 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
     {
         if ((stage == SCANNER_RADIO_GAIN_LNA && (requested_db > 40 || requested_db % 8 != 0))
             || (stage == SCANNER_RADIO_GAIN_VGA && (requested_db > 62 || requested_db % 2 != 0)))
+        {
+            LG('!', "Stub set gain failed: out of range stage=%d requested=%u dB", (int)stage,
+               (unsigned int)requested_db);
             return 0;
+        }
     }
     else if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
     {
@@ -754,13 +955,21 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
         int result;
         if (channel != 0 || (stage == SCANNER_RADIO_GAIN_LNA && (requested_db > 40 || requested_db % 8 != 0))
             || (stage == SCANNER_RADIO_GAIN_VGA && (requested_db > 62 || requested_db % 2 != 0)))
+        {
+            LG('!', "HackRF set gain failed: invalid channel or range stage=%d requested=%u dB", (int)stage,
+               (unsigned int)requested_db);
             return 0;
+        }
         result = stage == SCANNER_RADIO_GAIN_LNA
                      ? hackrf_set_lna_gain((hackrf_device *)frontend->device_handle, requested_db)
                      : hackrf_set_vga_gain((hackrf_device *)frontend->device_handle, requested_db);
         if (result != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF set gain failed stage=%d status=%d", (int)stage, result);
             return 0;
+        }
 #else
+        LG('!', "Set gain failed: HackRF backend disabled");
         return 0;
 #endif
     }
@@ -775,7 +984,10 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
                                                   sizeof(stages) / sizeof(stages[0]));
         int stage_index;
         if (stage_count < 0)
+        {
+            LG('!', "BladeRF gain stage query failed status=%d", stage_count);
             return 0;
+        }
         for (stage_index = 0; stage_index < stage_count && stage_index < (int)(sizeof(stages) / sizeof(stages[0]));
              ++stage_index)
         {
@@ -787,21 +999,33 @@ int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t chann
             }
         }
         if (stage_name == NULL)
+        {
+            LG('!', "BladeRF gain stage unavailable stage=%s", requested_stage);
             return -1;
+        }
         if (bladerf_set_gain_stage((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), stage_name,
                                    requested_db)
             != 0)
+        {
+            LG('!', "BladeRF set gain failed stage=%s requested=%u dB", stage_name, (unsigned int)requested_db);
             return 0;
+        }
 #else
+        LG('!', "Set gain failed: BladeRF backend disabled");
         return 0;
 #endif
     }
     else
+    {
+        LG('!', "Set gain failed: unsupported backend=%d", (int)frontend->backend);
         return 0;
+    }
 
     *stored_gain = requested_db;
     *configured = 1;
     *actual_db = requested_db;
+    LG('+', "Set gain frontend=%u channel=%u stage=%s applied=%u dB", (unsigned int)frontend->id, (unsigned int)channel,
+       stage == SCANNER_RADIO_GAIN_LNA ? "LNA" : "VGA", (unsigned int)*actual_db);
     return 1;
 }
 
@@ -810,25 +1034,39 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     int total_db;
     if (frontend == NULL || gain_cdb == NULL)
+    {
+        LG('!', "Get total gain failed: inactive radio, invalid channel or output channel=%u", (unsigned int)channel);
         return 0;
+    }
 #ifdef SCANNER_HAVE_BLADERF
     if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
     {
         int gain_db = 0;
         if (bladerf_get_gain((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &gain_db) != 0)
+        {
+            LG('!', "BladeRF get total gain failed channel=%u", (unsigned int)channel);
             return 0;
+        }
         total_db = gain_db;
     }
     else
 #endif
     {
         if (!frontend->lna_gain_configured || !frontend->vga_gain_configured)
+        {
+            LG('!', "Get total gain failed: not configured channel=%u", (unsigned int)channel);
             return -1;
+        }
         total_db = (int)frontend->configured_lna_gain_db + (int)frontend->configured_vga_gain_db;
     }
     if (total_db > INT16_MAX / 100 || total_db < INT16_MIN / 100)
+    {
+        LG('!', "Get total gain failed: value=%d dB exceeds response range", total_db);
         return 0;
+    }
     *gain_cdb = (int16_t)(total_db * 100);
+    LG('+', "Get total gain frontend=%u channel=%u value=%d cdb", (unsigned int)frontend->id, (unsigned int)channel,
+       (int)*gain_cdb);
     return 1;
 }
 
@@ -836,16 +1074,27 @@ int scanner_radio_get_gain_stages(ScannerRadioInventory *inventory, uint8_t chan
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     if (frontend == NULL || lna_db == NULL || vga_db == NULL)
+    {
+        LG('!', "Get gain stages failed: inactive radio, invalid channel or output channel=%u", (unsigned int)channel);
         return 0;
+    }
 
     if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF || frontend->backend == SCANNER_RADIO_BACKEND_STUB)
     {
         if (!frontend->lna_gain_configured || !frontend->vga_gain_configured)
+        {
+            LG('!', "Get gain stages failed: not configured channel=%u", (unsigned int)channel);
             return -1;
+        }
         if (frontend->configured_lna_gain_db > INT8_MAX || frontend->configured_vga_gain_db > INT8_MAX)
+        {
+            LG('!', "Get gain stages failed: values exceed response range channel=%u", (unsigned int)channel);
             return 0;
+        }
         *lna_db = (int8_t)frontend->configured_lna_gain_db;
         *vga_db = (int8_t)frontend->configured_vga_gain_db;
+        LG('+', "Get gain stages frontend=%u channel=%u LNA=%d dB VGA=%d dB", (unsigned int)frontend->id,
+           (unsigned int)channel, (int)*lna_db, (int)*vga_db);
         return 1;
     }
 
@@ -854,14 +1103,23 @@ int scanner_radio_get_gain_stages(ScannerRadioInventory *inventory, uint8_t chan
     {
         int gain_db = 0;
         if (bladerf_get_gain((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &gain_db) != 0)
+        {
+            LG('!', "BladeRF get gain stages failed channel=%u", (unsigned int)channel);
             return 0;
+        }
         if (gain_db < INT8_MIN || gain_db > INT8_MAX)
+        {
+            LG('!', "BladeRF get gain stages failed: value=%d dB exceeds response range", gain_db);
             return 0;
+        }
         *lna_db = (int8_t)gain_db;
         *vga_db = 0;
+        LG('+', "Get gain stages frontend=%u channel=%u LNA=%d dB VGA=%d dB", (unsigned int)frontend->id,
+           (unsigned int)channel, (int)*lna_db, (int)*vga_db);
         return 1;
     }
 #endif
+    LG('!', "Get gain stages unsupported backend=%d", (int)frontend->backend);
     return -2;
 }
 
@@ -871,37 +1129,62 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
     size_t required_size;
+    int result;
     if (frontend == NULL || output == NULL || output_size == NULL || sample_format == NULL || complex_pairs == 0
         || complex_pairs > SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS || timeout_ms == 0 || !frontend->frequency_configured
         || !frontend->sample_rate_configured || !frontend->bandwidth_configured)
+    {
+        LG('!', "IQ capture failed: invalid arguments or radio not configured channel=%u pairs=%u timeout=%u ms",
+           (unsigned int)channel, (unsigned int)complex_pairs, timeout_ms);
         return 0;
+    }
 
     required_size = (size_t)complex_pairs * (frontend->iq_sample_format == SCANNER_RADIO_IQ_FORMAT_S16 ? 4u : 2u);
     if (output_capacity < required_size)
+    {
+        LG('!', "IQ capture failed: output capacity=%lu required=%lu", (unsigned long)output_capacity,
+           (unsigned long)required_size);
         return 0;
+    }
     *output_size = 0;
 
     switch (frontend->backend)
     {
     case SCANNER_RADIO_BACKEND_STUB:
-        return scanner_radio_capture_stub(frontend, complex_pairs, output, output_size, sample_format);
+        result = scanner_radio_capture_stub(frontend, complex_pairs, output, output_size, sample_format);
+        break;
     case SCANNER_RADIO_BACKEND_HACKRF:
-        return scanner_radio_capture_hackrf(frontend, channel, complex_pairs, output, required_size, output_size,
-                                            sample_format, timeout_ms);
+        result = scanner_radio_capture_hackrf(frontend, channel, complex_pairs, output, required_size, output_size,
+                                              sample_format, timeout_ms);
+        break;
     case SCANNER_RADIO_BACKEND_BLADERF:
-        return scanner_radio_capture_bladerf(frontend, channel, complex_pairs, output, required_size, output_size,
-                                             sample_format, timeout_ms);
+        result = scanner_radio_capture_bladerf(frontend, channel, complex_pairs, output, required_size, output_size,
+                                               sample_format, timeout_ms);
+        break;
     default:
+        LG('!', "IQ capture failed: unsupported backend=%d", (int)frontend->backend);
         return 0;
     }
+    LG(result ? '+' : '!', "IQ capture %s frontend=%u backend=%s channel=%u pairs=%u bytes=%lu timeout=%u ms",
+       result ? "completed" : "failed", (unsigned int)frontend->id, scanner_radio_backend_name(frontend->backend),
+       (unsigned int)channel, (unsigned int)complex_pairs, (unsigned long)*output_size, timeout_ms);
+    return result;
 }
 
 int scanner_radio_prepare_capture_buffer(ScannerRadioInventory *inventory, uint8_t channel)
 {
     ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
+    int result;
     if (frontend == NULL || frontend->backend != SCANNER_RADIO_BACKEND_BLADERF)
+    {
+        LG('!', "Capture buffer preparation failed: inactive radio, invalid channel or backend channel=%u",
+           (unsigned int)channel);
         return 0;
-    return scanner_radio_prepare_bladerf_capture(frontend);
+    }
+    result = scanner_radio_prepare_bladerf_capture(frontend);
+    LG(result ? '+' : '!', "Capture buffer preparation %s frontend=%u", result ? "completed" : "failed",
+       (unsigned int)frontend->id);
+    return result;
 }
 
 int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs,
@@ -913,14 +1196,21 @@ int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t 
     size_t size = 0;
     int result;
     if (noise_floor_cdbfs == NULL || complex_pairs == 0 || complex_pairs > SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS)
+    {
+        LG('!', "Noise floor measurement failed: invalid arguments pairs=%u", (unsigned int)complex_pairs);
         return 0;
+    }
     iq = (uint8_t *)malloc((size_t)complex_pairs * 4u);
     if (iq == NULL)
+    {
+        LG('!', "Noise floor measurement failed: IQ allocation pairs=%u", (unsigned int)complex_pairs);
         return 0;
+    }
     result = scanner_radio_capture_iq(inventory, channel, complex_pairs, iq, (size_t)complex_pairs * 4u, &size,
                                       &radio_format, timeout_ms);
     if (!result)
     {
+        LG('!', "Noise floor measurement failed: capture channel=%u", (unsigned int)channel);
         free(iq);
         return 0;
     }
@@ -930,11 +1220,16 @@ int scanner_radio_measure_noise_floor(ScannerRadioInventory *inventory, uint8_t 
         dsp_format = SCANNER_DSP_IQ_FORMAT_S16_Q11;
     else
     {
+        LG('!', "Noise floor measurement failed: unsupported IQ format=%u", (unsigned int)radio_format);
         free(iq);
         return 0;
     }
 
     result = scanner_dsp_estimate_noise_floor_dbfs(iq, size, complex_pairs, dsp_format, noise_floor_cdbfs);
     free(iq);
+    if (result)
+        LG('+', "Noise floor measured channel=%u value=%d cdbfs", (unsigned int)channel, (int)*noise_floor_cdbfs);
+    else
+        LG('!', "Noise floor estimation failed channel=%u", (unsigned int)channel);
     return result;
 }

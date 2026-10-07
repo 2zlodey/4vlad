@@ -59,7 +59,7 @@ add_library(scanner_radio STATIC
     src/radio_capture_backend.c
 )
 target_include_directories(scanner_radio PUBLIC include)
-target_link_libraries(scanner_radio PUBLIC scanner_dsp)
+target_link_libraries(scanner_radio PUBLIC scanner_dsp scanner_log)
 if(SCANNER_ENABLE_STUB_SDR)
     target_compile_definitions(scanner_radio PUBLIC SCANNER_ENABLE_STUB_SDR=1)
     message(STATUS "Stub SDR fallback enabled")
@@ -88,6 +88,11 @@ if(SCANNER_HACKRF_INCLUDE_DIR AND SCANNER_HACKRF_LIBRARY)
 else()
     message(STATUS "HackRF development files not found; backend disabled")
 endif()
+
+add_library(scanner_log STATIC src/scanner_log.c)
+target_include_directories(scanner_log PUBLIC include)
+target_link_libraries(scanner_log PUBLIC Threads::Threads)
+scanner_enable_warnings(scanner_log)
 
 add_executable(scanner_node
     src/main.c
@@ -122,6 +127,11 @@ endforeach()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(scanner_log_tests tests/log_tests.c)
+    target_link_libraries(scanner_log_tests PRIVATE scanner_log)
+    scanner_enable_warnings(scanner_log_tests)
+    add_test(NAME scanner_log_tests COMMAND scanner_log_tests)
+
     add_executable(scanner_protocol_tests tests/protocol_tests.c)
     target_link_libraries(scanner_protocol_tests PRIVATE scanner_protocol scanner_radio)
     scanner_enable_warnings(scanner_protocol_tests)
@@ -145,7 +155,7 @@ if(BUILD_TESTING)
         src/protocol.c
     )
     target_include_directories(scanner_udp_integration_tests PRIVATE include)
-    target_link_libraries(scanner_udp_integration_tests PRIVATE cjson)
+    target_link_libraries(scanner_udp_integration_tests PRIVATE cjson scanner_log)
     if(WIN32)
         target_link_libraries(scanner_udp_integration_tests PRIVATE ws2_32)
     endif()

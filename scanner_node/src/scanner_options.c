@@ -1,4 +1,5 @@
 #include "scanner_options.h"
+#include "scanner_log.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -16,6 +17,8 @@ void scanner_options_print_usage(const char *program)
         "  --device-json PATH    Input device JSON (default ../scanner-node-build/device.json)\n"
         "  --save-device-json P  Write loaded Device JSON to P, then continue\n"
         "  --iq-file PATH        Append captured IQ windows to a SCIQREC1 file\n"
+        "  --debug N             0=start/fatal only, 1=console (default), 2=TXT, 3=HTML\n"
+        "                        Timestamped log files are created in the current directory\n"
         "  --software-version V  VER ASCII version, 1-10 bytes (default 1.0.0.0)\n"
         "  --attempts N          Handshake attempts (default 5)\n"
         "  --handshake-timeout N Handshake timeout in ms (default 2000)\n"
@@ -56,6 +59,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
     options->attempts = 5;
     options->handshake_timeout_ms = 2000;
     options->ver_timeout_ms = 3000;
+    options->debug = 1;
 
     for (index = 1; index < argc; ++index)
     {
@@ -74,7 +78,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
         }
         if (index + 1 >= argc)
         {
-            fprintf(stderr, "Missing value for %s\n", argument);
+            LGF("Missing value for %s", argument);
             return 0;
         }
         value = argv[++index];
@@ -88,11 +92,20 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
             options->save_device_json = value;
         else if (strcmp(argument, "--iq-file") == 0)
             options->iq_file = value;
+        else if (strcmp(argument, "--debug") == 0)
+        {
+            if (strlen(value) != 1 || value[0] < '0' || value[0] > '3')
+            {
+                LGF("--debug must be 0..3");
+                return 0;
+            }
+            options->debug = (unsigned int)(value[0] - '0');
+        }
         else if (strcmp(argument, "--software-version") == 0)
         {
             if (strlen(value) == 0 || strlen(value) > 10)
             {
-                fprintf(stderr, "--software-version must be 1 to 10 bytes\n");
+                LGF("--software-version must be 1 to 10 bytes");
                 return 0;
             }
             options->software_version = value;
@@ -101,7 +114,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
         {
             if (!parse_unsigned(value, 65535, &parsed))
             {
-                fprintf(stderr, "Invalid port for %s\n", argument);
+                LGF("Invalid port for %s", argument);
                 return 0;
             }
             if (strcmp(argument, "--server-port") == 0)
@@ -115,7 +128,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
             unsigned long maximum = strcmp(argument, "--attempts") == 0 ? 100 : 60000;
             if (!parse_unsigned(value, maximum, &parsed))
             {
-                fprintf(stderr, "Invalid positive integer for %s\n", argument);
+                LGF("Invalid positive integer for %s", argument);
                 return 0;
             }
             if (strcmp(argument, "--attempts") == 0)
@@ -127,7 +140,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
         }
         else
         {
-            fprintf(stderr, "Unknown option: %s\n", argument);
+            LGF("Unknown option: %s", argument);
             return 0;
         }
     }

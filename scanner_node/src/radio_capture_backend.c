@@ -3,6 +3,7 @@
 #endif
 
 #include "radio_capture_backend.h"
+#include "scanner_log.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -104,13 +105,17 @@ int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel
     hackrf_device *device = (hackrf_device *)frontend->device_handle;
     (void)complex_pairs;
     if (channel != 0 || frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S8 || !hackrf_context_init(&context))
+    {
+        LG('!', "HackRF capture setup failed: channel, sample format or mutex initialization");
         return 0;
+    }
 
     context.output = output;
     context.capacity = required_size;
     context.bytes_written = 0;
     if (hackrf_start_rx(device, hackrf_capture_callback, &context) != HACKRF_SUCCESS)
     {
+        LG('!', "HackRF RX start failed");
         hackrf_context_destroy(&context);
         return 0;
     }
@@ -140,7 +145,11 @@ int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel
     hackrf_context_unlock(&context);
     hackrf_context_destroy(&context);
     if (bytes_written != context.capacity || stop_result != HACKRF_SUCCESS)
+    {
+        LG('!', "HackRF RX incomplete or stop failed bytes=%lu required=%lu stop-status=%d waited=%u ms",
+           (unsigned long)bytes_written, (unsigned long)context.capacity, stop_result, waited_ms);
         return 0;
+    }
     *output_size = bytes_written;
     *sample_format = SCANNER_RADIO_IQ_FORMAT_S8;
     return 1;
@@ -158,6 +167,7 @@ int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel
     (void)output_size;
     (void)sample_format;
     (void)timeout_ms;
+    LG('!', "HackRF capture unavailable: backend disabled");
     return 0;
 }
 #endif
@@ -210,7 +220,10 @@ int scanner_radio_capture_stub(ScannerRadioFrontend *frontend, uint16_t complex_
     int64_t amplitude;
     if (!frontend->frequency_configured || !frontend->sample_rate_configured || !frontend->bandwidth_configured
         || !frontend->lna_gain_configured || !frontend->vga_gain_configured)
+    {
+        LG('!', "Stub capture failed: frequency, sample rate, bandwidth or gain not configured");
         return 0;
+    }
 
     target_dbfs = (long double)stub_target_power_cdbfs(frontend->configured_frequency_hz) / 100.0L;
     base_dbfs = 20.0L * log10l(74.0L / 128.0L);
@@ -231,6 +244,8 @@ static int ensure_bladerf_capture_buffer(ScannerRadioFrontend *frontend)
         return 1;
     capacity = (size_t)SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS * frontend->rx_channels * 2u * sizeof(int16_t);
     frontend->capture_buffer = malloc(capacity);
+    LG(frontend->capture_buffer != NULL ? '+' : '!', "BladeRF capture buffer allocation %s bytes=%lu",
+       frontend->capture_buffer != NULL ? "completed" : "failed", (unsigned long)capacity);
     return frontend->capture_buffer != NULL;
 }
 #endif
@@ -239,10 +254,14 @@ int scanner_radio_prepare_bladerf_capture(ScannerRadioFrontend *frontend)
 {
     if (frontend == NULL || frontend->backend != SCANNER_RADIO_BACKEND_BLADERF || frontend->rx_channels == 0
         || frontend->rx_channels > 2)
+    {
+        LG('!', "BladeRF capture preparation failed: invalid frontend or channel count");
         return 0;
+    }
 #ifdef SCANNER_HAVE_BLADERF
     return ensure_bladerf_capture_buffer(frontend);
 #else
+    LG('!', "BladeRF capture preparation unavailable: backend disabled");
     return 0;
 #endif
 }
@@ -259,34 +278,52 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
     bladerf_channel_layout layout;
     int result;
     if (frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S16 || channel_count == 0)
+    {
+        LG('!', "BladeRF capture failed: invalid sample format or channel count");
         return 0;
+    }
     layout = channel_count > 1 ? BLADERF_RX_X2 : BLADERF_RX_X1;
     if (!ensure_bladerf_capture_buffer(frontend))
         return 0;
     raw = (int16_t *)frontend->capture_buffer;
     if (bladerf_sync_config(device, layout, BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, timeout_ms) != 0)
+    {
+        LG('!', "BladeRF synchronous RX configuration failed");
         return 0;
+    }
     if (channel_count > 1)
     {
         if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0
             || bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), true) != 0)
         {
-            bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), false);
-            bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), false);
+            LG('!', "BladeRF dual-channel RX enable failed");
+            if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), false) != 0)
+                LG('!', "BladeRF RX channel 0 cleanup disable failed");
+            if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), false) != 0)
+                LG('!', "BladeRF RX channel 1 cleanup disable failed");
             return 0;
         }
     }
     else if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0)
+    {
+        LG('!', "BladeRF RX enable failed");
         return 0;
+    }
     {
         struct bladerf_metadata metadata;
         memset(&metadata, 0, sizeof(metadata));
         result = bladerf_sync_rx(device, raw, complex_pairs, &metadata, timeout_ms);
     }
     for (pair_index = 0; pair_index < channel_count; ++pair_index)
-        bladerf_enable_module(device, BLADERF_CHANNEL_RX((unsigned int)pair_index), false);
+    {
+        if (bladerf_enable_module(device, BLADERF_CHANNEL_RX((unsigned int)pair_index), false) != 0)
+            LG('!', "BladeRF RX disable failed channel=%u", (unsigned int)pair_index);
+    }
     if (result != 0)
+    {
+        LG('!', "BladeRF synchronous RX failed status=%d", result);
         return 0;
+    }
     for (pair_index = 0; pair_index < complex_pairs; ++pair_index)
     {
         size_t source_index = (pair_index * channel_count + channel) * 2u;
@@ -315,6 +352,7 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
     (void)output_size;
     (void)sample_format;
     (void)timeout_ms;
+    LG('!', "BladeRF capture unavailable: backend disabled");
     return 0;
 }
 #endif

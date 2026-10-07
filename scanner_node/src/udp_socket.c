@@ -11,13 +11,16 @@
 #include <unistd.h>
 #endif
 
+#include "scanner_log.h"
 #include "udp_socket.h"
+
 
 #include <stdio.h>
 #include <string.h>
 
 static void set_error(char *error, size_t error_size, const char *operation, int code)
 {
+    LG('!', "UDP operation %s failed code=%d", operation, code);
     if (error == NULL || error_size == 0)
         return;
 
@@ -37,6 +40,7 @@ int scanner_udp_open(ScannerUdpSocket *socket_handle, char *error, size_t error_
     }
     socket_handle->handle = SCANNER_INVALID_SOCKET;
     socket_handle->winsock_started = 0;
+    socket_handle->log_command_frames = 0;
 #ifdef _WIN32
     {
         WSADATA data;
@@ -63,6 +67,7 @@ int scanner_udp_open(ScannerUdpSocket *socket_handle, char *error, size_t error_
         return 0;
     }
 #endif
+    LG('+', "UDP socket opened");
     return 1;
 }
 
@@ -77,6 +82,7 @@ static int make_endpoint(const char *address, uint16_t port, struct sockaddr_in 
         if (error != NULL && error_size > 0)
         {
             snprintf(error, error_size, "Invalid IPv4 address: %s", address == NULL ? "(null)" : address);
+            LG('!', "%s", error);
         }
         return 0;
     }
@@ -101,6 +107,7 @@ int scanner_udp_bind(ScannerUdpSocket *socket_handle, const char *address, uint1
 #endif
         return 0;
     }
+    LG('+', "UDP socket bound to %s:%u", address, (unsigned int)port);
     return 1;
 }
 
@@ -167,6 +174,11 @@ int scanner_udp_send(ScannerUdpSocket *socket_handle, const char *address, uint1
         }
     }
 #endif
+    {
+        char destination[64];
+        snprintf(destination, sizeof(destination), "%s:%u", address, (unsigned int)port);
+        scanner_log_packet('>', __FILE__, destination, data, size, socket_handle->log_command_frames);
+    }
     return 1;
 }
 
@@ -239,6 +251,11 @@ int scanner_udp_receive(ScannerUdpSocket *socket_handle, unsigned int timeout_ms
         datagram->size = (size_t)received;
     }
 #endif
+    {
+        char source[64];
+        scanner_endpoint_string(&datagram->source, source, sizeof(source));
+        scanner_log_packet('<', __FILE__, source, datagram->payload, datagram->size, socket_handle->log_command_frames);
+    }
     return 1;
 }
 
@@ -255,6 +272,7 @@ void scanner_udp_close(ScannerUdpSocket *socket_handle)
         close(socket_handle->handle);
 #endif
         socket_handle->handle = SCANNER_INVALID_SOCKET;
+        LG('+', "UDP socket closed");
     }
 #ifdef _WIN32
     if (socket_handle->winsock_started)

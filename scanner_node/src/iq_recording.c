@@ -1,4 +1,5 @@
 #include "iq_recording.h"
+#include "scanner_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,7 @@ static void write_u64_le(uint8_t *output, uint64_t value)
 
 static void set_error(char *error, size_t error_size, const char *message)
 {
+    LG('!', "%s", message);
     if (error != NULL && error_size > 0)
         snprintf(error, error_size, "%s", message);
 }
@@ -41,15 +43,19 @@ int scanner_iq_recording_open(const char *path, FILE **file, char *error, size_t
         return 0;
     }
     *file = NULL;
+    LG('*', "Opening IQ recording path=%s", path);
     stream = fopen(path, "ab+");
     if (stream == NULL)
     {
+        LG('!', "IQ recording open failed path=%s", path);
         set_error(error, error_size, "Cannot open IQ recording file");
         return 0;
     }
     if (fseek(stream, 0, SEEK_END) != 0 || (file_size = ftell(stream)) < 0)
     {
-        fclose(stream);
+        LG('*', "Closing IQ recording after inspection failure path=%s", path);
+        if (fclose(stream) != 0)
+            LG('!', "IQ recording cleanup close failed path=%s", path);
         set_error(error, error_size, "Cannot inspect IQ recording file");
         return 0;
     }
@@ -57,7 +63,9 @@ int scanner_iq_recording_open(const char *path, FILE **file, char *error, size_t
     {
         if (fwrite(IQ_RECORD_FILE_MAGIC, 1, IQ_RECORD_FILE_MAGIC_SIZE, stream) != IQ_RECORD_FILE_MAGIC_SIZE)
         {
-            fclose(stream);
+            LG('*', "Closing IQ recording after header write failure path=%s", path);
+            if (fclose(stream) != 0)
+                LG('!', "IQ recording cleanup close failed path=%s", path);
             set_error(error, error_size, "Cannot write IQ recording header");
             return 0;
         }
@@ -68,12 +76,15 @@ int scanner_iq_recording_open(const char *path, FILE **file, char *error, size_t
             || fread(magic, 1, IQ_RECORD_FILE_MAGIC_SIZE, stream) != IQ_RECORD_FILE_MAGIC_SIZE
             || memcmp(magic, IQ_RECORD_FILE_MAGIC, IQ_RECORD_FILE_MAGIC_SIZE) != 0 || fseek(stream, 0, SEEK_END) != 0)
         {
-            fclose(stream);
+            LG('*', "Closing unsupported IQ recording path=%s", path);
+            if (fclose(stream) != 0)
+                LG('!', "IQ recording cleanup close failed path=%s", path);
             set_error(error, error_size, "Existing file is not a supported SCIQREC1 recording");
             return 0;
         }
     }
     *file = stream;
+    LG('+', "IQ recording opened path=%s mode=%s", path, file_size == 0 ? "new" : "append");
     return 1;
 }
 
@@ -116,6 +127,8 @@ int scanner_iq_recording_write(FILE *file, const ScannerRadioFrontend *frontend,
         set_error(error, error_size, "Failed writing IQ capture record");
         return 0;
     }
+    LG('+', "IQ record written frontend=%u channel=%u samples=%u format=%u bytes=%lu", (unsigned int)frontend->id,
+       (unsigned int)channel, (unsigned int)complex_samples, (unsigned int)sample_format, (unsigned long)iq_size);
     return 1;
 }
 
@@ -123,6 +136,9 @@ void scanner_iq_recording_close(FILE **file)
 {
     if (file == NULL || *file == NULL)
         return;
-    (void)fclose(*file);
+    if (fclose(*file) != 0)
+        LG('!', "IQ recording close failed");
+    else
+        LG('+', "IQ recording closed");
     *file = NULL;
 }

@@ -48,6 +48,7 @@ extern "C"
      * Expected result: best-effort output without altering perf state.
      */
     void perf_hal_printf(const char *fmt, ...);
+    void perf_hal_set_log_sink(void (*sink)(const char *line));
 
 #ifdef __cplusplus
 }

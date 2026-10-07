@@ -5,7 +5,19 @@
 #include "perf_probe_hal.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
+
+
+static void (*log_sink)(const char *line);
+static char log_line[1024];
+static size_t log_length;
+
+void perf_hal_set_log_sink(void (*sink)(const char *line))
+{
+    log_sink = sink;
+    log_length = 0;
+}
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -83,6 +95,26 @@ void perf_hal_printf(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    (void)vprintf(fmt, args);
+    if (log_sink == NULL)
+        (void)vprintf(fmt, args);
+    else
+    {
+        char fragment[1024];
+        const char *position;
+        vsnprintf(fragment, sizeof(fragment), fmt, args);
+        for (position = fragment; *position; ++position)
+        {
+            if (*position == '\r')
+                continue;
+            if (*position == '\n' || log_length == sizeof(log_line) - 1)
+            {
+                log_line[log_length] = '\0';
+                log_sink(log_line);
+                log_length = 0;
+            }
+            if (*position != '\n')
+                log_line[log_length++] = *position;
+        }
+    }
     va_end(args);
 }

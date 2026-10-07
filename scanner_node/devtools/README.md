@@ -36,6 +36,8 @@ if (@($pi).Count -ne 1) { throw 'Expected exactly one rpi4.' }
 Discovery was verified on 2026-10-07: `rpi4`, Raspberry Pi 4 Model B Rev 1.5, `armv7l`, at `10.215.246.141`. The IP is not hardcoded in the discovery helper and may change with DHCP.
 
 ## Pi Build And Sweep
+Logging verification for all four debug modes is available through `tools/logging_e2e_test.py --client PATH --device-json PATH`. It runs complete UDP command sessions, verifies console/file destinations, HTML escaping, packet metadata, IQ omission and fatal errors. `tools/radio_e2e_test.py` also accepts `--debug 0..3` for a single run. File modes create timestamped logs in the process working directory.
+
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\devtools\build_pi_sweep.ps1

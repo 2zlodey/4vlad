@@ -16,6 +16,7 @@ typedef struct
     unsigned int attempts;
     unsigned int handshake_timeout_ms;
     unsigned int ver_timeout_ms;
+    unsigned int debug;
     int ignore_session_reply_size;
 } ScannerOptions;
 
