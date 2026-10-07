@@ -35,6 +35,68 @@ if (@($pi).Count -ne 1) { throw 'Expected exactly one rpi4.' }
 
 Discovery was verified on 2026-10-07: `rpi4`, Raspberry Pi 4 Model B Rev 1.5, `armv7l`, at `10.215.246.141`. The IP is not hardcoded in the discovery helper and may change with DHCP.
 
+## Remote Conductor
+
+Verified on 2026-10-07. This is a separate remote device, NOT the local `rpi4` discovered by `find_pi.ps1`:
+
+| Setting | Value |
+| --- | --- |
+| SSH host | `np.lora-wan.net` |
+| SSH port | `2222` |
+| Account | `vlad` |
+| Remote hostname | `conductor` |
+| Hardware | Raspberry Pi 4 Model B Rev 1.4 |
+| Architecture | `aarch64` (64-bit ARM) |
+| Deployed commit | `24e4a24` (`Add logging`) |
+| Deployment root | `/home/vlad/scanner-deploy/run_20261007_logging` |
+| Scanner executable | `/home/vlad/scanner-deploy/run_20261007_logging/scanner_node/build-remote/scanner_node` |
+
+Connect from Windows PowerShell:
+
+```powershell
+ssh -p 2222 vlad@np.lora-wan.net
+```
+
+Password authentication was verified; the local test Pi key `~/.ssh/rpi_scanner_ed25519` was rejected for this account. Enter the password directly at the terminal prompt. Do not store passwords in this repository, command arguments, scripts, logs, or chat notes. If SSH offers unrelated keys first, use `ssh -p 2222 -o PreferredAuthentications=password -o PubkeyAuthentication=no vlad@np.lora-wan.net`. Keep host-key checking enabled.
+
+For SCP, the port flag is uppercase `-P`:
+
+```powershell
+scp -P 2222 .\some-file vlad@np.lora-wan.net:/home/vlad/scanner-deploy/
+```
+
+At verification time, GCC, Git, Make, pkg-config and Python 3 were available, but CMake, Ninja and BladeRF/HackRF development packages were absent; no USB SDR was connected. `/mnt/scaner-ram` did not exist. `/home/vlad/4vlad` belongs to root and was left untouched. Deploy into a separate user-owned directory under `/home/vlad/scanner-deploy`; this is not the local Pi's tmpfs staging path.
+
+The current `build_pi_sweep.ps1` assumes SSH port 22, key authentication, a RAM-disk root and the Pi build script's package setup. It is NOT a drop-in deploy command for conductor. LAN discovery also does not locate this external endpoint.
+
+To create a fresh deployment, run inside the remote SSH shell, choosing a new unused directory name:
+
+```sh
+mkdir -p ~/scanner-deploy
+git clone --depth 1 --branch feature/project-initial-structure \
+	https://github.com/2zlodey/4vlad.git ~/scanner-deploy/run_NEW_TIMESTAMP
+cd ~/scanner-deploy/run_NEW_TIMESTAMP/scanner_node
+mkdir -p build-remote
+gcc -std=c99 -O2 -Wall -Wextra -Wpedantic \
+	-D_POSIX_C_SOURCE=200809L -DSCANNER_ENABLE_STUB_SDR=1 \
+	-DCONFIG_PERF_ENABLE=1 -DCONFIG_PERF_STRINGS=1 -DCONFIG_PERF_LOG_ENABLE=1 \
+	-Iinclude -Iperf_lib -I../cJSON src/*.c \
+	perf_lib/perf_probe.c perf_lib/perf_probe_hal_host.c ../cJSON/cJSON.c \
+	-pthread -lm -o build-remote/scanner_node.new
+```
+
+Only after GCC succeeds, install the new binary and run the local-controller tests:
+
+```sh
+mv build-remote/scanner_node.new build-remote/scanner_node
+python3 tools/radio_e2e_test.py --client ./build-remote/scanner_node --device-json ../device.json --debug 0
+python3 tools/logging_e2e_test.py --client ./build-remote/scanner_node --device-json ../device.json
+```
+
+This GCC command intentionally enables the Stub fallback and does not compile hardware SDK backends. Without physical SDRs, the verified deployment exposes frontend ID `0`, one RX channel, synthetic IQ/power, separate gain settings and the normal UDP commands. Real SDR support requires installing the SDK dependencies and rebuilding with the corresponding backends, preferably through CMake. Stub results are not RF measurements.
+
+The full radio E2E and all four logging modes passed on conductor. Tests use a loopback UDP controller, do not contact the production server, and terminate the scanner afterwards. Deployment does not configure a service or autostart. For a manual production run, explicitly provide the device JSON and desired server settings; `--debug 2/3` creates timestamped logs in the current working directory.
+
 ## Pi Build And Sweep
 Logging verification for all four debug modes is available through `tools/logging_e2e_test.py --client PATH --device-json PATH`. It runs complete UDP command sessions, verifies console/file destinations, HTML escaping, packet metadata, IQ omission and fatal errors. `tools/radio_e2e_test.py` also accepts `--debug 0..3` for a single run. File modes create timestamped logs in the process working directory.
 
