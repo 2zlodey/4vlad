@@ -10,6 +10,31 @@ powershell -ExecutionPolicy Bypass -File .\devtools\verify_local.ps1
 
 This builds the existing CMake tree, runs CTest, and runs the Python mock-server tests using the workspace `.venv` when present. Add `-RunE2E` to run the full scanner/mock UDP session, or `-SkipPython` to omit Python tests. `-FrontendId 1` selects a different mock frontend for E2E.
 
+## Find The Pi
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\devtools\find_pi.ps1
+```
+
+The helper derives IPv4 networks from active local adapters and checks TCP port 22 in bounded parallel batches. It then authenticates using `rpi` and `~/.ssh/rpi_scanner_ed25519`, verifies `/proc/device-tree/model`, and returns `Address`, `SshTarget`, `Model`, `HostName`, and `Architecture`. An open SSH port alone is not considered a Raspberry Pi. Authentication failures are reported without prompting for passwords. New SSH host keys are accepted and stored; changed keys are not silently accepted.
+
+By default, at most 4096 addresses are checked; larger adapter networks are skipped with a warning. Use explicit CIDR ranges to restrict discovery, and override the account/key when needed:
+
+```powershell
+.\devtools\find_pi.ps1 -Subnet 10.215.246.0/24
+.\devtools\find_pi.ps1 -Subnet 192.168.1.0/24 -UserName rpi -IdentityFile "$HOME\.ssh\rpi_scanner_ed25519"
+```
+
+Use the verified result with the build helper instead of its fixed default IP. If multiple Pis are returned, select the intended hostname:
+
+```powershell
+$pi = .\devtools\find_pi.ps1 | Where-Object HostName -eq 'rpi4'
+if (@($pi).Count -ne 1) { throw 'Expected exactly one rpi4.' }
+.\devtools\build_pi_sweep.ps1 -PiHost $pi.SshTarget -BuildOnly
+```
+
+Discovery was verified on 2026-10-07: `rpi4`, Raspberry Pi 4 Model B Rev 1.5, `armv7l`, at `10.215.246.141`. The IP is not hardcoded in the discovery helper and may change with DHCP.
+
 ## Pi Build And Sweep
 
 ```powershell

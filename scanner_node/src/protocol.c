@@ -258,6 +258,20 @@ size_t scanner_encode_gain_response(uint8_t output[9], uint32_t request_id, uint
     return 9;
 }
 
+size_t scanner_encode_gain_stages_response(uint8_t output[9], uint32_t request_id, uint8_t status, uint8_t channel,
+                                           int8_t lna_db, int8_t vga_db)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_GET_GAIN_STAGES_COMMAND;
+    output[5] = status;
+    output[6] = channel;
+    output[7] = (uint8_t)lna_db;
+    output[8] = (uint8_t)vga_db;
+    return 9;
+}
+
 size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uint8_t command, uint8_t status,
                                      uint8_t channel, int16_t noise_floor_cdbfs)
 {
@@ -411,6 +425,14 @@ int scanner_decode_get_gain_request(const uint8_t *bytes, size_t size, ScannerGe
     if (request == NULL)
         return 0;
     return decode_get_value_request(bytes, size, SCANNER_GET_GAIN_COMMAND, &request->request_id, &request->channel);
+}
+
+int scanner_decode_get_gain_stages_request(const uint8_t *bytes, size_t size, ScannerGetValueRequest *request)
+{
+    if (request == NULL)
+        return 0;
+    return decode_get_value_request(bytes, size, SCANNER_GET_GAIN_STAGES_COMMAND, &request->request_id,
+                                    &request->channel);
 }
 
 int scanner_decode_measure_current_request(const uint8_t *bytes, size_t size, ScannerGetValueRequest *request)

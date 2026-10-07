@@ -1,8 +1,8 @@
 #include "perf_probe.h"
 #include "perf_probe_hal.h"
 
-#include <string.h>
 #include <inttypes.h>
+#include <string.h>
 
 #if CONFIG_PERF_ENABLE
 
@@ -381,8 +381,7 @@ void perf_report(void)
             perf_hal_printf("fail=%lu ", (unsigned long)snap.fail_count);
 
         perf_hal_printf("min=%.3f ms avg=%.3f ms max=%.3f ms", (double)snap.min_us / 1000.0,
-                (double)perf_stats_avg_us(&snap) / 1000.0,
-                (double)snap.max_us / 1000.0);
+                        (double)perf_stats_avg_us(&snap) / 1000.0, (double)snap.max_us / 1000.0);
 
         perf_hal_printf("\r\n");
     }

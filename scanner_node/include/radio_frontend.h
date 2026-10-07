@@ -95,8 +95,7 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory);
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory);
 int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,
                                 uint64_t *actual_frequency_hz);
-int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel,
-                                            uint64_t frequency_hz);
+int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz);
 int scanner_radio_get_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t *frequency_hz);
 int scanner_radio_set_sample_rate(ScannerRadioInventory *inventory, uint8_t channel, uint32_t requested_hz,
                                   uint32_t *actual_hz);
@@ -107,6 +106,8 @@ int scanner_radio_get_bandwidth(ScannerRadioInventory *inventory, uint8_t channe
 int scanner_radio_set_gain_stage(ScannerRadioInventory *inventory, uint8_t channel, ScannerRadioGainStage stage,
                                  uint8_t requested_db, uint8_t *actual_db);
 int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t channel, int16_t *gain_cdb);
+/* Returns 1 on success, 0 on hardware error, -1 if unset, or -2 if stages are unsupported. */
+int scanner_radio_get_gain_stages(ScannerRadioInventory *inventory, uint8_t channel, int8_t *lna_db, int8_t *vga_db);
 int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
                              size_t output_capacity, size_t *output_size, uint8_t *sample_format,
                              unsigned int timeout_ms);

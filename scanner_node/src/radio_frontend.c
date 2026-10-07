@@ -541,8 +541,7 @@ int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channe
     return set_frequency(inventory, channel, frequency_hz, actual_frequency_hz, 1);
 }
 
-int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel,
-                                            uint64_t frequency_hz)
+int scanner_radio_set_frequency_no_readback(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz)
 {
     return set_frequency(inventory, channel, frequency_hz, NULL, 0);
 }
@@ -833,6 +832,39 @@ int scanner_radio_get_total_gain(ScannerRadioInventory *inventory, uint8_t chann
     return 1;
 }
 
+int scanner_radio_get_gain_stages(ScannerRadioInventory *inventory, uint8_t channel, int8_t *lna_db, int8_t *vga_db)
+{
+    ScannerRadioFrontend *frontend = active_frontend_mutable(inventory, channel);
+    if (frontend == NULL || lna_db == NULL || vga_db == NULL)
+        return 0;
+
+    if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF || frontend->backend == SCANNER_RADIO_BACKEND_STUB)
+    {
+        if (!frontend->lna_gain_configured || !frontend->vga_gain_configured)
+            return -1;
+        if (frontend->configured_lna_gain_db > INT8_MAX || frontend->configured_vga_gain_db > INT8_MAX)
+            return 0;
+        *lna_db = (int8_t)frontend->configured_lna_gain_db;
+        *vga_db = (int8_t)frontend->configured_vga_gain_db;
+        return 1;
+    }
+
+#ifdef SCANNER_HAVE_BLADERF
+    if (frontend->backend == SCANNER_RADIO_BACKEND_BLADERF)
+    {
+        int gain_db = 0;
+        if (bladerf_get_gain((struct bladerf *)frontend->device_handle, BLADERF_CHANNEL_RX(channel), &gain_db) != 0)
+            return 0;
+        if (gain_db < INT8_MIN || gain_db > INT8_MAX)
+            return 0;
+        *lna_db = (int8_t)gain_db;
+        *vga_db = 0;
+        return 1;
+    }
+#endif
+    return -2;
+}
+
 int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, uint16_t complex_pairs, uint8_t *output,
                              size_t output_capacity, size_t *output_size, uint8_t *sample_format,
                              unsigned int timeout_ms)
@@ -854,11 +886,11 @@ int scanner_radio_capture_iq(ScannerRadioInventory *inventory, uint8_t channel, 
     case SCANNER_RADIO_BACKEND_STUB:
         return scanner_radio_capture_stub(frontend, complex_pairs, output, output_size, sample_format);
     case SCANNER_RADIO_BACKEND_HACKRF:
-        return scanner_radio_capture_hackrf(frontend, channel, complex_pairs, output, required_size,
-                                            output_size, sample_format, timeout_ms);
+        return scanner_radio_capture_hackrf(frontend, channel, complex_pairs, output, required_size, output_size,
+                                            sample_format, timeout_ms);
     case SCANNER_RADIO_BACKEND_BLADERF:
-        return scanner_radio_capture_bladerf(frontend, channel, complex_pairs, output, required_size,
-                                             output_size, sample_format, timeout_ms);
+        return scanner_radio_capture_bladerf(frontend, channel, complex_pairs, output, required_size, output_size,
+                                             sample_format, timeout_ms);
     default:
         return 0;
     }

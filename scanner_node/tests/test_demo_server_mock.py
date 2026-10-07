@@ -9,6 +9,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from tools.demo_server_mock import (  # noqa: E402
     HANDSHAKE_SIZE,
+    GET_GAIN_STAGES_COMMAND,
     MockProtocolError,
     build_frequency_response,
     build_get_frequency_request,
@@ -25,10 +26,17 @@ from tools.demo_server_mock import (  # noqa: E402
     serve_one,
     parse_radio_frontends_response,
     validate_ver_response,
+    validate_gain_stages_response,
 )
 
 
 class DemoServerMockTests(unittest.TestCase):
+    def test_gain_fields_preserve_signed_bladerf_gain_and_zero_vga(self):
+        payload = struct.pack("<IBBBbb", 17, GET_GAIN_STAGES_COMMAND, 0, 0, -15, 0)
+        self.assertTrue(validate_gain_stages_response(payload, 17, 0, -15, 0))
+        with self.assertRaises(MockProtocolError):
+            validate_gain_stages_response(payload, 17, 0, -15, 1)
+
     def test_parses_scanner_handshake_layout(self):
         packet = bytearray(HANDSHAKE_SIZE)
         struct.pack_into("<IqqH", packet, 0, 7, 123, 456, 3333)

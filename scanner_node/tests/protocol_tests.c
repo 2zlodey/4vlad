@@ -30,12 +30,14 @@ int main(int argc, char **argv)
     const uint8_t set_frequency_request_bytes[10] = { 0xdd, 0xcc, 0xbb, 0xaa, SCANNER_SET_FREQUENCY_COMMAND,
                                                       1,    0xa0, 0x86, 0x01, 0x00 };
     const uint8_t get_frequency_request_bytes[6] = { 0x0d, 0x00, 0x00, 0x00, SCANNER_GET_FREQUENCY_COMMAND, 1 };
+    const uint8_t get_gain_stages_request_bytes[6] = { 0x21, 0x43, 0x65, 0x87, SCANNER_GET_GAIN_STAGES_COMMAND, 0 };
     const uint8_t select_request_bytes[SCANNER_VER_REQUEST_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
     uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
     uint8_t select_response[7];
     uint8_t exit_response[6];
     uint8_t frequency_response[15];
     uint8_t iq_file_response[14];
+    uint8_t gain_stages_response[9];
     ScannerVerRequest request;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
@@ -43,6 +45,7 @@ int main(int argc, char **argv)
     ScannerSetFrequencyRequest set_frequency_request;
     ScannerGetFrequencyRequest get_frequency_request;
     ScannerRawIqRequest save_iq_request;
+    ScannerGetValueRequest get_gain_stages_request;
     ScannerRadioInventory inventory;
     ScannerRadioInventory close_inventory;
 #ifdef SCANNER_ENABLE_STUB_SDR
@@ -146,13 +149,19 @@ int main(int argc, char **argv)
                                                     &exit_request),
                        "Frontend query was accepted as an Exit request");
     ok &= require_true(scanner_decode_save_iq_request(save_iq_request_bytes, sizeof(save_iq_request_bytes),
-                                                     &save_iq_request)
-                           && save_iq_request.request_id == UINT32_C(0x12345678)
-                           && save_iq_request.channel == 2 && save_iq_request.complex_pairs == 64,
+                                                      &save_iq_request)
+                           && save_iq_request.request_id == UINT32_C(0x12345678) && save_iq_request.channel == 2
+                           && save_iq_request.complex_pairs == 64,
                        "SAVE_IQ_TO_FILE request decode failed");
     ok &= require_true(!scanner_decode_save_iq_request(save_iq_request_bytes, sizeof(save_iq_request_bytes) - 1,
                                                        &save_iq_request),
                        "Short SAVE_IQ_TO_FILE request was accepted");
+    ok &= require_true(scanner_decode_get_gain_stages_request(get_gain_stages_request_bytes,
+                                                              sizeof(get_gain_stages_request_bytes),
+                                                              &get_gain_stages_request)
+                           && get_gain_stages_request.request_id == UINT32_C(0x87654321)
+                           && get_gain_stages_request.channel == 0,
+                       "GET_GAIN_STAGES request decode failed");
     ok &= require_true(scanner_decode_set_frequency_request(set_frequency_request_bytes,
                                                             sizeof(set_frequency_request_bytes), &set_frequency_request)
                            && set_frequency_request.request_id == UINT32_C(0xaabbccdd)
@@ -197,15 +206,27 @@ int main(int argc, char **argv)
                            && exit_response[0] == 11 && exit_response[4] == SCANNER_EXIT_COMMAND
                            && exit_response[5] == SCANNER_RADIO_STATUS_OK,
                        "Exit acknowledgment encoding failed");
-    ok &= require_true(scanner_encode_iq_file_response(iq_file_response, UINT32_C(0x12345678),
-                                                      SCANNER_RADIO_STATUS_OK, 2, SCANNER_RADIO_IQ_FORMAT_S16,
-                                                      64, 256) == sizeof(iq_file_response)
+    ok &= require_true(scanner_encode_iq_file_response(iq_file_response, UINT32_C(0x12345678), SCANNER_RADIO_STATUS_OK,
+                                                       2, SCANNER_RADIO_IQ_FORMAT_S16, 64, 256)
+                               == sizeof(iq_file_response)
                            && iq_file_response[0] == 0x78 && iq_file_response[3] == 0x12
                            && iq_file_response[4] == SCANNER_SAVE_IQ_TO_FILE_COMMAND
                            && iq_file_response[5] == SCANNER_RADIO_STATUS_OK && iq_file_response[6] == 2
-                           && iq_file_response[7] == SCANNER_RADIO_IQ_FORMAT_S16
-                           && iq_file_response[8] == 64 && iq_file_response[10] == 0 && iq_file_response[11] == 1,
+                           && iq_file_response[7] == SCANNER_RADIO_IQ_FORMAT_S16 && iq_file_response[8] == 64
+                           && iq_file_response[10] == 0 && iq_file_response[11] == 1,
                        "IQ file response metadata is not encoded correctly");
+    ok &= require_true(scanner_encode_gain_stages_response(gain_stages_response, UINT32_C(0x87654321),
+                                                           SCANNER_RADIO_STATUS_OK, 0, 24, 38)
+                               == sizeof(gain_stages_response)
+                           && gain_stages_response[0] == 0x21 && gain_stages_response[3] == 0x87
+                           && gain_stages_response[4] == SCANNER_GET_GAIN_STAGES_COMMAND
+                           && gain_stages_response[5] == SCANNER_RADIO_STATUS_OK && gain_stages_response[6] == 0
+                           && gain_stages_response[7] == 24 && gain_stages_response[8] == 38,
+                       "GET_GAIN_STAGES response did not preserve separate values");
+    ok &= require_true(scanner_encode_gain_stages_response(gain_stages_response, 15, SCANNER_RADIO_STATUS_OK, 0, -15, 0)
+                               == sizeof(gain_stages_response)
+                           && gain_stages_response[7] == 0xf1 && gain_stages_response[8] == 0,
+                       "GET_GAIN_STAGES did not encode signed BladeRF gain with zero VGA");
     ok &= require_true(scanner_encode_frequency_response(frequency_response, 14, SCANNER_GET_FREQUENCY_COMMAND,
                                                          SCANNER_RADIO_STATUS_OK, 1, UINT64_C(100000000))
                                == sizeof(frequency_response)

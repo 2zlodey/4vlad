@@ -13,8 +13,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const ScannerOptions *options, ScannerRadioWorker *worker,
-                                   char *error, size_t error_size)
+static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const ScannerOptions *options,
+                                   ScannerRadioWorker *worker, char *error, size_t error_size)
 {
     for (;;)
     {

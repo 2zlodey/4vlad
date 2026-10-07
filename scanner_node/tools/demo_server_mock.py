@@ -24,6 +24,7 @@ SET_LNA_GAIN_COMMAND = 0x66
 SET_VGA_GAIN_COMMAND = 0x67
 SET_BANDWIDTH_COMMAND = 0x68
 GET_GAIN_COMMAND = 0x6B
+GET_GAIN_STAGES_COMMAND = 0x6E
 GET_SAMPLE_RATE_COMMAND = 0x6C
 MEASURE_CURRENT_COMMAND = 0x6D
 MEASURE_FREQUENCY_COMMAND = 0x02
@@ -199,6 +200,10 @@ def build_get_value_request(request_id, command, channel):
     return struct.pack("<IBB", request_id, command, channel)
 
 
+def build_get_gain_stages_request(request_id, channel):
+    return build_get_value_request(request_id, GET_GAIN_STAGES_COMMAND, channel)
+
+
 def build_set_gain_request(request_id, command, channel, gain_db):
     return struct.pack("<IBBB", request_id, command, channel, gain_db)
 
@@ -240,6 +245,21 @@ def validate_gain_stage_response(payload, expected_id, command, channel, gain_db
     if status == RADIO_STATUS_UNSUPPORTED and actual_gain == 0:
         return False
     raise MockProtocolError("gain-stage response returned an invalid status or readback")
+
+
+def validate_gain_stages_response(payload, expected_id, channel, expected_lna_db, expected_vga_db):
+    if len(payload) != 9:
+        raise MockProtocolError("gain-stages response has {} bytes, expected 9".format(len(payload)))
+    actual_id, command, status, actual_channel, lna_db, vga_db = struct.unpack("<IBBBbb", payload)
+    if (actual_id, command, actual_channel) != (expected_id, GET_GAIN_STAGES_COMMAND, channel):
+        raise MockProtocolError("gain-stages response id, command, or channel mismatch")
+    if status == RADIO_STATUS_OK:
+        if (lna_db, vga_db) != (expected_lna_db, expected_vga_db):
+            raise MockProtocolError("gain-stages response did not return expected gain fields")
+        return True
+    if status == RADIO_STATUS_UNSUPPORTED and lna_db == 0 and vga_db == 0:
+        return False
+    raise MockProtocolError("gain-stages response returned invalid status or values")
 
 
 def validate_iq_file_response(payload, expected_id, channel, sample_format, complex_pairs):
@@ -359,9 +379,24 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
     response = exchange_radio_request(
         sock, endpoint, build_get_value_request(gain_read_id, GET_GAIN_COMMAND, 0)
     )
-    validate_signed_value_response(response, gain_read_id, GET_GAIN_COMMAND, 0)
+    total_gain_cdb = validate_signed_value_response(response, gain_read_id, GET_GAIN_COMMAND, 0)
+    if frontend["sample_resolution_bits"] == 12:
+        if total_gain_cdb % 100:
+            raise MockProtocolError("BladeRF total gain is not an integer dB value")
+        expected_lna_db, expected_vga_db = total_gain_cdb // 100, 0
+    else:
+        expected_lna_db, expected_vga_db = lna_gain_db, vga_gain_db
+    get_stages_id = next_request_id(gain_read_id)
+    response = exchange_radio_request(
+        sock, endpoint, build_get_gain_stages_request(get_stages_id, 0)
+    )
+    gain_stages_supported = validate_gain_stages_response(
+        response, get_stages_id, 0, expected_lna_db, expected_vga_db
+    )
+    if not gain_stages_supported:
+        raise MockProtocolError("GET_GAIN_STAGES is unsupported on the expected frontend")
 
-    current_power_id = next_request_id(gain_read_id)
+    current_power_id = next_request_id(get_stages_id)
     response = exchange_radio_request(
         sock, endpoint, build_get_value_request(current_power_id, MEASURE_CURRENT_COMMAND, 0)
     )
@@ -402,6 +437,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "bandwidth_hz": bandwidth_hz,
         "gain_readback": True,
         "gain_stages_supported": lna_supported and vga_supported,
+        "gain_stage_readback_supported": gain_stages_supported,
         "current_power": True,
         "raw_iq_bytes": len(raw_iq),
         "saved_iq_bytes": saved_iq_bytes,

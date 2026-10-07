@@ -64,3 +64,20 @@ Thumbs.db
 
 # Local build outputs at repo root
 /device.bin
+/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db
+/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/{6AF0698E-D558-4F6E-9B3C-3716689AF493}.2.ver0x0000000000000001.db
+/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/{DDF571F2-BE98-426D-8288-1A9A39C3FDA2}.2.ver0x0000000000000001.db
+/scanner_node/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/cversions.2.db
+/scanner_node/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/{6AF0698E-D558-4F6E-9B3C-3716689AF493}.2.ver0x0000000000000001.db
+/scanner_node/%SystemDrive%/ProgramData/Microsoft/Windows/Caches/{DDF571F2-BE98-426D-8288-1A9A39C3FDA2}.2.ver0x0000000000000001.db
+/scanner_node/README.pdf
+/scanner_node/measurements/av1660_dense_bladerf.csv
+/scanner_node/measurements/av1660_dense_warmup_bladerf.csv
+/scanner_node/measurements/av1660_final_bladerf.csv
+/scanner_node/measurements/av1660_harmonics_bladerf.csv
+/scanner_node/measurements/av1660_harmonics_settled_bladerf.csv
+/scanner_node/measurements/av1660_reverse_bladerf.csv
+/scanner_node/measurements/av1660_settled_smoke_bladerf.csv
+/scanner_node/measurements/av1660_shifted_start_bladerf.csv
+/scanner_node/measurements/av1660_targeted_bladerf.csv
+/scanner_node/measurements/threaded_smoke/air_sweep_bladerf2_micro_100-140MHz_sample20MHz_grid20MHz_totalGain60.0dB_20261001T230408.csv

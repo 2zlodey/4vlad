@@ -1,8 +1,8 @@
+#include "radio_commands.h"
 #include "analysis_worker.h"
 #include "iq_recording.h"
 #include "perf_probe.h"
 #include "protocol.h"
-#include "radio_commands.h"
 #include "radio_frontend.h"
 #include "signal_classifier.h"
 
@@ -57,7 +57,7 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
     const ScannerRadioFrontend *frontend;
     char analysis_error[160];
     if (app == NULL || app->analysis_worker == NULL || noise_floor_cdbfs == NULL
-           || !capture_and_record(app, inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format))
+        || !capture_and_record(app, inventory, channel, complex_pairs, iq, sizeof(iq), &iq_size, &radio_format))
         return 0;
     frontend = scanner_radio_active(inventory);
     if (frontend == NULL || scanner_radio_get_sample_rate(inventory, channel, &sample_rate_hz) != 1)
@@ -87,7 +87,8 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
 }
 
 int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
-                                const ScannerDatagram *datagram, ScannerRadioWorkerResult *worker_result, void *context)
+                                 const ScannerDatagram *datagram, ScannerRadioWorkerResult *worker_result,
+                                 void *context)
 {
     uint8_t response[SCANNER_RADIO_COMMAND_RESPONSE_MAX_SIZE];
     size_t response_size;
@@ -333,6 +334,36 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         return 1;
     }
 
+    if (scanner_decode_get_gain_stages_request(datagram->payload, datagram->size, &get_value_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        int8_t lna_db = 0;
+        int8_t vga_db = 0;
+        int gain_result;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (get_value_request.channel >= active_frontend->rx_channels)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_GAIN))
+            status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        else
+        {
+            gain_result = scanner_radio_get_gain_stages(inventory, get_value_request.channel, &lna_db, &vga_db);
+            if (gain_result == 0)
+                status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+            else if (gain_result == -1)
+                status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
+            else if (gain_result == -2)
+                status = SCANNER_RADIO_STATUS_UNSUPPORTED;
+        }
+        response_size = scanner_encode_gain_stages_response(response, get_value_request.request_id, status,
+                                                            get_value_request.channel, lna_db, vga_db);
+        if (!store_worker_response(worker_result, response, response_size))
+            return 0;
+        return 1;
+    }
+
     if (scanner_decode_measure_current_request(datagram->payload, datagram->size, &get_value_request))
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
@@ -345,8 +376,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!analyze_captured_window(inventory, get_value_request.channel, 1024, 512, app,
-                                          &noise_floor_cdbfs, &analysis_result))
+        else if (!analyze_captured_window(inventory, get_value_request.channel, 1024, 512, app, &noise_floor_cdbfs,
+                                          &analysis_result))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_power_response(response, get_value_request.request_id,
                                                       SCANNER_MEASURE_CURRENT_COMMAND, status,
@@ -467,14 +498,14 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         response_size = scanner_encode_iq_file_response(response, raw_iq_request.request_id, status,
                                                         raw_iq_request.channel,
                                                         status == SCANNER_RADIO_STATUS_OK ? format : 0,
-                                                        status == SCANNER_RADIO_STATUS_OK
-                                                            ? raw_iq_request.complex_pairs : 0,
+                                                        status == SCANNER_RADIO_STATUS_OK ? raw_iq_request.complex_pairs
+                                                                                          : 0,
                                                         status == SCANNER_RADIO_STATUS_OK ? (uint32_t)iq_size : 0);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         if (status == SCANNER_RADIO_STATUS_OK)
-            printf("Saved IQ capture: %u complex samples, %lu bytes\n",
-                   (unsigned int)raw_iq_request.complex_pairs, (unsigned long)iq_size);
+            printf("Saved IQ capture: %u complex samples, %lu bytes\n", (unsigned int)raw_iq_request.complex_pairs,
+                   (unsigned long)iq_size);
         return 1;
     }
 
@@ -493,7 +524,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_RX))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
         else if (!capture_and_record(app, inventory, raw_iq_request.channel, raw_iq_request.complex_pairs, iq,
-                         sizeof(iq), &iq_size, &format))
+                                     sizeof(iq), &iq_size, &format))
             status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
         response_size = scanner_encode_raw_iq_response(response, sizeof(response), raw_iq_request.request_id, status,
                                                        raw_iq_request.channel, format,
@@ -519,4 +550,3 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     fprintf(stderr, "Ignoring malformed or unsupported radio command\n");
     return 1;
 }
-

@@ -153,7 +153,8 @@ def main():
     expected_raw_iq_bytes = 64 * (2 if selected["iq_sample_format"] == 1 else 4)
     if (not command_checks or command_checks.get("raw_iq_bytes") != expected_raw_iq_bytes
             or command_checks.get("saved_iq_bytes") != expected_raw_iq_bytes
-            or command_checks.get("sweep_points") != 2):
+            or command_checks.get("sweep_points") != 2
+            or "gain_stage_readback_supported" not in command_checks):
         raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")
     recorded_count = validate_iq_recording(iq_file, len(inventory["frontends"]) * 6)
     print(

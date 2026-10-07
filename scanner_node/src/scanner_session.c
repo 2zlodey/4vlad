@@ -53,9 +53,8 @@ static void wall_clock_parts(int64_t *seconds, int64_t *microseconds)
 #endif
 }
 
-static int receive_expected(ScannerUdpSocket *socket_handle, const ScannerOptions *options,
-                            unsigned int timeout_ms, size_t expected_size, ScannerDatagram *accepted,
-                            char *error, size_t error_size)
+static int receive_expected(ScannerUdpSocket *socket_handle, const ScannerOptions *options, unsigned int timeout_ms,
+                            size_t expected_size, ScannerDatagram *accepted, char *error, size_t error_size)
 {
     uint64_t deadline = monotonic_milliseconds() + timeout_ms;
     while (monotonic_milliseconds() < deadline)
@@ -115,8 +114,8 @@ static int exchange_handshake(ScannerUdpSocket *socket_handle, const ScannerOpti
             return 0;
         printf("Handshake attempt %u/%u sent (%u bytes)\n", attempt, options->attempts,
                (unsigned int)sizeof(handshake));
-        result = receive_expected(socket_handle, options, options->handshake_timeout_ms,
-                                  SCANNER_SESSION_REPLY_SIZE, &reply, error, error_size);
+        result = receive_expected(socket_handle, options, options->handshake_timeout_ms, SCANNER_SESSION_REPLY_SIZE,
+                                  &reply, error, error_size);
         if (result < 0)
             return 0;
         if (result == 1)
@@ -127,8 +126,8 @@ static int exchange_handshake(ScannerUdpSocket *socket_handle, const ScannerOpti
     return 0;
 }
 
-static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOptions *options,
-                            char *error, size_t error_size)
+static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOptions *options, char *error,
+                            size_t error_size)
 {
     ScannerDatagram datagram;
     uint64_t deadline = monotonic_milliseconds() + options->ver_timeout_ms;
@@ -162,11 +161,11 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
             fprintf(stderr, "Invalid VER software version\n");
             return 0;
         }
-        if (!scanner_udp_send(socket_handle, options->server_address, options->server_port, response,
-                              sizeof(response), error, error_size))
+        if (!scanner_udp_send(socket_handle, options->server_address, options->server_port, response, sizeof(response),
+                              error, error_size))
             return 0;
-        printf("VER %" PRIu32 " answered with version %s (%u bytes)\n", request.request_id,
-               options->software_version, (unsigned int)sizeof(response));
+        printf("VER %" PRIu32 " answered with version %s (%u bytes)\n", request.request_id, options->software_version,
+               (unsigned int)sizeof(response));
         return 1;
     }
     fprintf(stderr, "Timed out waiting for a valid VER request\n");

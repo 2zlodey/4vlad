@@ -94,8 +94,8 @@ static int hackrf_capture_callback(hackrf_transfer *transfer)
 }
 
 int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel, uint16_t complex_pairs,
-                                 uint8_t *output, size_t required_size, size_t *output_size,
-                                 uint8_t *sample_format, unsigned int timeout_ms)
+                                 uint8_t *output, size_t required_size, size_t *output_size, uint8_t *sample_format,
+                                 unsigned int timeout_ms)
 {
     HackrfCaptureContext context;
     unsigned int waited_ms;
@@ -103,8 +103,7 @@ int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel
     size_t bytes_written;
     hackrf_device *device = (hackrf_device *)frontend->device_handle;
     (void)complex_pairs;
-    if (channel != 0 || frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S8
-        || !hackrf_context_init(&context))
+    if (channel != 0 || frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S8 || !hackrf_context_init(&context))
         return 0;
 
     context.output = output;
@@ -148,8 +147,8 @@ int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel
 }
 #else
 int scanner_radio_capture_hackrf(ScannerRadioFrontend *frontend, uint8_t channel, uint16_t complex_pairs,
-                                 uint8_t *output, size_t required_size, size_t *output_size,
-                                 uint8_t *sample_format, unsigned int timeout_ms)
+                                 uint8_t *output, size_t required_size, size_t *output_size, uint8_t *sample_format,
+                                 unsigned int timeout_ms)
 {
     (void)frontend;
     (void)channel;
@@ -250,8 +249,8 @@ int scanner_radio_prepare_bladerf_capture(ScannerRadioFrontend *frontend)
 
 #ifdef SCANNER_HAVE_BLADERF
 int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channel, uint16_t complex_pairs,
-                                  uint8_t *output, size_t required_size, size_t *output_size,
-                                  uint8_t *sample_format, unsigned int timeout_ms)
+                                  uint8_t *output, size_t required_size, size_t *output_size, uint8_t *sample_format,
+                                  unsigned int timeout_ms)
 {
     unsigned int channel_count = frontend->rx_channels;
     size_t pair_index;
@@ -305,8 +304,8 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
 }
 #else
 int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channel, uint16_t complex_pairs,
-                                  uint8_t *output, size_t required_size, size_t *output_size,
-                                  uint8_t *sample_format, unsigned int timeout_ms)
+                                  uint8_t *output, size_t required_size, size_t *output_size, uint8_t *sample_format,
+                                  unsigned int timeout_ms)
 {
     (void)frontend;
     (void)channel;

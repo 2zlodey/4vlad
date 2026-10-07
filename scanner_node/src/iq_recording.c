@@ -66,8 +66,7 @@ int scanner_iq_recording_open(const char *path, FILE **file, char *error, size_t
     {
         if (file_size < (long)IQ_RECORD_FILE_MAGIC_SIZE || fseek(stream, 0, SEEK_SET) != 0
             || fread(magic, 1, IQ_RECORD_FILE_MAGIC_SIZE, stream) != IQ_RECORD_FILE_MAGIC_SIZE
-            || memcmp(magic, IQ_RECORD_FILE_MAGIC, IQ_RECORD_FILE_MAGIC_SIZE) != 0
-            || fseek(stream, 0, SEEK_END) != 0)
+            || memcmp(magic, IQ_RECORD_FILE_MAGIC, IQ_RECORD_FILE_MAGIC_SIZE) != 0 || fseek(stream, 0, SEEK_END) != 0)
         {
             fclose(stream);
             set_error(error, error_size, "Existing file is not a supported SCIQREC1 recording");
@@ -79,8 +78,8 @@ int scanner_iq_recording_open(const char *path, FILE **file, char *error, size_t
 }
 
 int scanner_iq_recording_write(FILE *file, const ScannerRadioFrontend *frontend, uint8_t channel,
-                               uint16_t complex_samples, uint8_t sample_format, const uint8_t *iq,
-                               size_t iq_size, char *error, size_t error_size)
+                               uint16_t complex_samples, uint8_t sample_format, const uint8_t *iq, size_t iq_size,
+                               char *error, size_t error_size)
 {
     uint8_t header[IQ_RECORD_HEADER_SIZE] = { 0 };
     size_t bytes_per_sample;
