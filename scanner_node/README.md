@@ -48,7 +48,7 @@ The session reply is length-checked and its sender endpoint is checked, but the 
 
 These experimental commands use little-endian `RequestId`; the C# DemoServer does not yet dispatch them. The Python mock supports them with `--radio-commands`. Commands are accepted only from the configured server endpoint. Unknown or malformed command datagrams are ignored.
 
-Implemented command numbers match the original XLSX catalog, including `EXIT` (`0xDE`, formerly `0x06`). Packet framing still uses this client's `RequestId` and response status; opcode alignment alone does not make it wire-compatible with the bare XLSX packets. `0x04`, `0x05`, `0x6E`, `0x70`, `0x71` are non-conflicting extensions. Original commands `0x69`, `0xC8`, `0xC9` are not implemented. Clients must now send `0xDE` for EXIT; the old `0x06` is ignored.
+Implemented command numbers match the original XLSX catalog, including `EXIT` (`0xDE`, formerly `0x06`). Packet framing still uses this client's `RequestId` and response status; opcode alignment alone does not make it wire-compatible with the bare XLSX packets. `0x04`, `0x05`, `0x6E`, `0x70`, `0x71` are non-conflicting extensions. `0x69` reinitializes the active SDR. Original commands `0xC8`, `0xC9` have network handlers routed to external commutator placeholders, not hardware implementations. Clients must now send `0xDE` for EXIT; the old `0x06` is ignored.
 
 ### Command Frames
 
@@ -70,6 +70,21 @@ Implemented command numbers match the original XLSX catalog, including `EXIT` (`
 | `0x70` | `GET_RAW_IQ` | 8 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, complex_pairs:u16 LE` | 10-byte header `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE]` followed by interleaved I/Q bytes. |
 | `0x71` | `SAVE_IQ_TO_FILE` | Same 8-byte request as `GET_RAW_IQ` | 14 bytes: `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE, payload_bytes:u32 LE]`; samples are written locally, not returned over UDP. |
 | `0xDE` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
+| `0x69` | `REINITIALIZE_SDR` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
+| `0xC8` | `SELECT_ANTENNA` | 7 bytes: `request_id:u32 LE, opcode:u8, board_channel:u8, antenna:u8` | 8 bytes: `request_id:u32 LE, opcode:u8, status:u8, board_channel:u8, applied_antenna:u8` |
+| `0xC9` | `SET_PATH` | 7 bytes: `request_id:u32 LE, opcode:u8, board_channel:u8, value:u8` | 9 bytes: `request_id:u32 LE, opcode:u8, status:u8, board_channel:u8, power_cdb:i16 LE` |
+
+### SDR Reinitialization
+
+`REINITIALIZE_SDR` (`0x69`) closes and reopens the currently active SDR through its existing backend lifecycle (BladeRF, HackRF or Stub). It frees the capture buffer, clears the cached frequency/sample-rate/bandwidth/gain settings and reinitializes the HackRF library when applicable. Success returns `OK` (`0`) and keeps the same frontend selected. Set sample rate, bandwidth and both gain stages where supported, and tune again before the next capture. BladeRF can supply initial hardware frequency readback during reopening; this does not restore the previous configuration. This is backend reinitialization, not a USB or firmware reset.
+
+Without an active open SDR, the response is `NO_ACTIVE_FRONTEND` (`4`). Backend close/open failure returns `HARDWARE_ERROR` (`7`); failed reopening leaves no active handle. The operation runs in the radio worker, serialized with other SDR commands. It does not call the external commutator.
+
+### External Commutator Placeholders
+
+The commutator is a separate externally controlled board. `include/commutator.h` and `src/commutator.c` define its boundary: antenna routing (`0xC8`) and gain/attenuator path control (`0xC9`). Both functions currently only log the requested operation and return `UNSUPPORTED` (status `8`). They do not open a board connection, alter SDR settings, reset a radio, select a physical antenna, or synthesize a measurement. SDR reinitialization (`0x69`) belongs to the radio frontend, not this module.
+
+Board channels are `0` or `1`, independently of active SDR selection; channel `2..255` returns `INVALID_CHANNEL` (`5`) without calling the board function. Antenna/value bytes can encode `0..255`, but hardware ranges and value units are not yet defined. Failed responses contain zero for applied antenna or power; those zeros are not valid applied values or measurements. Request IDs, opcodes and board channels are echoed as applicable. A future board implementation can return success or hardware error through `ScannerCommutatorResult` without changing the UDP dispatch boundary.
 
 For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Radio status values are `0` success, `1` invalid, `2` not found, `3` not configured, `4` no active frontend, `5` invalid RX channel, `6` outside range or unsupported discrete value, `7` backend operation failed, `8` operation unsupported, and `9` capture failed. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; selecting it alone does not start a stream or transmit RF.
 

@@ -91,6 +91,7 @@ typedef enum
 void scanner_radio_discover(ScannerRadioInventory *inventory);
 int scanner_radio_add_stub(ScannerRadioInventory *inventory);
 int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id);
+int scanner_radio_reinitialize(ScannerRadioInventory *inventory);
 void scanner_radio_close_all(ScannerRadioInventory *inventory);
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory);
 int scanner_radio_set_frequency(ScannerRadioInventory *inventory, uint8_t channel, uint64_t frequency_hz,

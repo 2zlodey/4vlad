@@ -339,7 +339,46 @@ def exchange_radio_request(sock, endpoint, request):
     return response
 
 
+def exercise_commutator_commands(sock, endpoint, request_id):
+    cases = [(command, channel, value, 8) for command in (0xC8, 0xC9)
+              for channel in (0, 1) for value in (0, 255)]
+    cases += [(command, 2, 0, 5) for command in (0xC8, 0xC9)]
+    for command, channel, value, status in cases:
+        request_id = next_request_id(request_id)
+        request = struct.pack("<IB", request_id, command)
+        expected = struct.pack("<IBB", request_id, command, status)
+        if channel is not None:
+            request += struct.pack("<BB", channel, value)
+            expected += struct.pack("<BB", channel, 0) if command == 0xC8 else struct.pack("<Bh", channel, 0)
+        response = exchange_radio_request(sock, endpoint, request)
+        if response != expected:
+            raise MockProtocolError("commutator response mismatch for opcode 0x{:02x}".format(command))
+    return request_id
+
+
+def exercise_reinitialize_command(sock, endpoint, request_id, status):
+    request_id = next_request_id(request_id)
+    response = exchange_radio_request(sock, endpoint, struct.pack("<IB", request_id, 0x69))
+    if response != struct.pack("<IBB", request_id, 0x69, status):
+        raise MockProtocolError("SDR reinitialization returned unexpected status or header")
+    return request_id
+
+
 def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz):
+    request_id = exercise_reinitialize_command(sock, endpoint, request_id, RADIO_STATUS_OK)
+    cleared_settings = [GET_SAMPLE_RATE_COMMAND]
+    if frontend["sample_resolution_bits"] == 8:
+        cleared_settings.append(GET_GAIN_STAGES_COMMAND)
+    for command in cleared_settings:
+        request_id = next_request_id(request_id)
+        response = exchange_radio_request(sock, endpoint, build_get_value_request(request_id, command, 0))
+        expected = struct.pack("<IBBB", request_id, command, 3, 0) + bytes(4 if command == GET_SAMPLE_RATE_COMMAND else 2)
+        if response != expected:
+            raise MockProtocolError("SDR reinitialization did not clear configured settings")
+    request_id = next_request_id(request_id)
+    response = exchange_radio_request(sock, endpoint, build_set_frequency_request(request_id, 0, frequency_khz))
+    validate_frequency_response(response, request_id, SET_FREQUENCY_COMMAND, 0, frequency_khz * 1000)
+    request_id = exercise_commutator_commands(sock, endpoint, request_id)
     sample_rate_hz = min(max(frontend["sample_rate_min_hz"], 2000000),
                          frontend["sample_rate_max_hz"])
     sample_rate_id = next_request_id(request_id)
@@ -436,6 +475,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "sample_rate_hz": sample_rate_hz,
         "bandwidth_hz": bandwidth_hz,
         "gain_readback": True,
+        "sdr_reinitialized": True,
         "gain_stages_supported": lna_supported and vga_supported,
         "gain_stage_readback_supported": gain_stages_supported,
         "current_power": True,
@@ -622,6 +662,10 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
             radio_result["frequencies_hz"] = frequencies_hz
             radio_result["neutral_closed"] = True
             exit_after_id = inactive_frequency_id
+            if full_radio_commands:
+                exit_after_id = exercise_commutator_commands(sock, client_endpoint, exit_after_id)
+                exit_after_id = exercise_reinitialize_command(sock, client_endpoint, exit_after_id, 4)
+                radio_result["commutator_placeholders_checked"] = True
 
         exit_id = next_request_id(exit_after_id)
         sock.sendto(build_exit_request(exit_id), client_endpoint)

@@ -1,4 +1,5 @@
 #include "radio_commands.h"
+#include "commutator.h"
 #include "analysis_worker.h"
 #include "iq_recording.h"
 #include "perf_probe.h"
@@ -117,9 +118,47 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     ScannerMeasureFrequencyRequest measure_frequency_request;
     ScannerSweepRequest sweep_request;
     ScannerRawIqRequest raw_iq_request;
+    ScannerCommutatorRequest commutator_request;
+    ScannerVerRequest reinitialize_request;
     const ScannerRadioFrontend *active_frontend;
     ScannerRadioCommandContext *app = (ScannerRadioCommandContext *)context;
     PERF_SCOPE("radio.command");
+
+    if (scanner_decode_reinitialize_request(datagram->payload, datagram->size, &reinitialize_request))
+    {
+        uint8_t status = SCANNER_RADIO_STATUS_OK;
+        active_frontend = scanner_radio_active(inventory);
+        if (active_frontend == NULL || active_frontend->device_handle == NULL)
+            status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
+        else if (!scanner_radio_reinitialize(inventory))
+            status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        response_size = scanner_encode_reinitialize_response(response, reinitialize_request.request_id, status);
+        return store_worker_response(worker_result, response, response_size);
+    }
+
+    if (scanner_decode_commutator_request(datagram->payload, datagram->size, &commutator_request))
+    {
+        uint8_t status;
+        uint8_t applied_antenna = 0;
+        int16_t power_cdb = 0;
+        ScannerCommutatorResult result;
+        if (commutator_request.channel > 1)
+            status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else
+        {
+            if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND)
+                result = scanner_commutator_select_antenna(commutator_request.channel, commutator_request.value,
+                                                            &applied_antenna);
+            else
+                result = scanner_commutator_set_path(commutator_request.channel, commutator_request.value, &power_cdb);
+            status = result == SCANNER_COMMUTATOR_OK ? SCANNER_RADIO_STATUS_OK
+                     : result == SCANNER_COMMUTATOR_UNSUPPORTED ? SCANNER_RADIO_STATUS_UNSUPPORTED
+                                                               : SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        }
+        response_size = scanner_encode_commutator_response(response, &commutator_request, status,
+                                                            applied_antenna, power_cdb);
+        return store_worker_response(worker_result, response, response_size);
+    }
 
     if (scanner_decode_radio_frontends_request(datagram->payload, datagram->size, &frontends_request))
     {

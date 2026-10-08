@@ -105,6 +105,27 @@
  */
 #define SCANNER_SET_BANDWIDTH_COMMAND 0x68u
 
+/* Reinitialize the active SDR by closing and reopening its backend handle.
+ * Req: no arguments (5 bytes). Resp: status only after header (6 bytes).
+ * Clears capture resources and previous settings; configure RX again before capture.
+ * No selected/open SDR: NO_ACTIVE_FRONTEND; reopen failure: HARDWARE_ERROR.
+ * The same frontend remains selected on success; this is not a USB/firmware reset.
+ */
+#define SCANNER_REINITIALIZE_SDR_COMMAND 0x69u
+
+/* External board antenna selection. Req: channel:u8, antenna:u8 (7 bytes).
+ * Resp: channel:u8, applied_antenna:u8 (8 bytes). Channel: 0..1, antenna wire capacity: 0..255.
+ * Hardware antenna limits are not defined yet. Placeholder returns UNSUPPORTED, applied=0.
+ */
+#define SCANNER_SELECT_ANTENNA_COMMAND 0xc8u
+
+/* External board gain/attenuator path. Req: channel:u8, value:u8 (7 bytes).
+ * Resp: channel:u8, power_cdb:i16 (9 bytes). Channel: 0..1, value wire capacity: 0..255.
+ * Value units/hardware limits and measured power reference are not defined yet.
+ * Placeholder returns UNSUPPORTED with power=0; this is not a measurement.
+ */
+#define SCANNER_SET_PATH_COMMAND 0xc9u
+
 /* Read total gain, not individual stages; centi-dB means dB multiplied by 100.
  * Req: channel:u8. Resp: channel:u8, total_gain_cdb:i16 (9 bytes total).
  * BladeRF reads total hardware gain; HackRF/Stub sum their configured LNA and VGA.
@@ -255,6 +276,14 @@ typedef struct
 typedef struct
 {
     uint32_t request_id;
+    uint8_t command;
+    uint8_t channel;
+    uint8_t value;
+} ScannerCommutatorRequest;
+
+typedef struct
+{
+    uint32_t request_id;
     uint8_t channel;
 } ScannerGetValueRequest;
 
@@ -295,6 +324,11 @@ int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint3
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request);
 int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request);
 int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRequest *request);
+int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request);
+size_t scanner_encode_reinitialize_response(uint8_t output[6], uint32_t request_id, uint8_t status);
+int scanner_decode_commutator_request(const uint8_t *bytes, size_t size, ScannerCommutatorRequest *request);
+size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request,
+                                          uint8_t status, uint8_t applied_antenna, int16_t power_cdb);
 int scanner_decode_set_frequency_request(const uint8_t *bytes, size_t size, ScannerSetFrequencyRequest *request);
 int scanner_decode_get_frequency_request(const uint8_t *bytes, size_t size, ScannerGetFrequencyRequest *request);
 int scanner_decode_set_sample_rate_request(const uint8_t *bytes, size_t size, ScannerSetU32Request *request);

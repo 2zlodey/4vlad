@@ -96,6 +96,7 @@ scanner_enable_warnings(scanner_log)
 
 add_executable(scanner_node
     src/main.c
+    src/commutator.c
     src/iq_recording.c
     src/radio_commands.c
     src/scanner_options.c
@@ -127,6 +128,18 @@ endforeach()
 
 include(CTest)
 if(BUILD_TESTING)
+    if(SCANNER_ENABLE_STUB_SDR)
+        add_executable(scanner_radio_reinitialize_tests tests/radio_reinitialize_tests.c)
+        target_link_libraries(scanner_radio_reinitialize_tests PRIVATE scanner_protocol scanner_radio)
+        scanner_enable_warnings(scanner_radio_reinitialize_tests)
+        add_test(NAME scanner_radio_reinitialize_tests COMMAND scanner_radio_reinitialize_tests)
+    endif()
+
+    add_executable(scanner_commutator_tests tests/commutator_tests.c src/commutator.c)
+    target_link_libraries(scanner_commutator_tests PRIVATE scanner_protocol scanner_log)
+    scanner_enable_warnings(scanner_commutator_tests)
+    add_test(NAME scanner_commutator_tests COMMAND scanner_commutator_tests)
+
     add_executable(scanner_log_tests tests/log_tests.c)
     target_link_libraries(scanner_log_tests PRIVATE scanner_log)
     scanner_enable_warnings(scanner_log_tests)

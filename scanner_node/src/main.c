@@ -11,7 +11,6 @@
 #include "scanner_session.h"
 #include "udp_socket.h"
 
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>

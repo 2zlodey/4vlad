@@ -42,7 +42,8 @@ def main():
                 require(files[0].suffix == (".html" if mode == 3 else ".txt"), "Wrong log extension")
                 text = files[0].read_text()
                 require("[radio_frontend.c]" in text and "[scanner_session.c]" in text
-                        and "[radio_commands.c]" in text and "[iq_recording.c]" in text,
+                        and "[radio_commands.c]" in text and "[iq_recording.c]" in text
+                        and "[commutator.c]" in text,
                         "Primary module events missing")
                 require("opcode=0x02 status=0" in text and "hex=" in text, "UDP response metadata missing")
                 packets = [line for line in text.splitlines() if "opcode=0x70 status=0" in line]

@@ -323,6 +323,45 @@ void scanner_radio_discover(ScannerRadioInventory *inventory)
     LG(inventory->count > 0 ? '+' : '!', "Radio discovery completed: %lu frontend(s)", (unsigned long)inventory->count);
 }
 
+static int close_all_checked(ScannerRadioInventory *inventory);
+
+int scanner_radio_reinitialize(ScannerRadioInventory *inventory)
+{
+    ScannerRadioFrontend *frontend = (ScannerRadioFrontend *)scanner_radio_active(inventory);
+    uint8_t frontend_id;
+    if (frontend == NULL || frontend->device_handle == NULL)
+    {
+        LG('!', "SDR reinitialization failed: no active open frontend");
+        return 0;
+    }
+    frontend_id = frontend->id;
+    LG('i', "Reinitializing SDR frontend=%u backend=%s", (unsigned int)frontend_id,
+       scanner_radio_backend_name(frontend->backend));
+    if (!close_all_checked(inventory))
+    {
+        LG('!', "SDR reinitialization failed: backend close error frontend=%u", (unsigned int)frontend_id);
+        return 0;
+    }
+    frontend->configured_frequency_hz = 0;
+    frontend->configured_sample_rate_hz = 0;
+    frontend->configured_bandwidth_hz = 0;
+    frontend->configured_lna_gain_db = 0;
+    frontend->configured_vga_gain_db = 0;
+    frontend->frequency_configured = 0;
+    frontend->sample_rate_configured = 0;
+    frontend->bandwidth_configured = 0;
+    frontend->lna_gain_configured = 0;
+    frontend->vga_gain_configured = 0;
+    if (!scanner_radio_select(inventory, frontend_id) || frontend->device_handle == NULL)
+    {
+        scanner_radio_close_all(inventory);
+        LG('!', "SDR reinitialization failed: cannot reopen frontend=%u", (unsigned int)frontend_id);
+        return 0;
+    }
+    LG('+', "SDR reinitialized frontend=%u; previous configured settings cleared", (unsigned int)frontend_id);
+    return 1;
+}
+
 static void release_capture_resources(ScannerRadioFrontend *frontend)
 {
     free(frontend->capture_buffer);
@@ -497,13 +536,14 @@ int scanner_radio_select(ScannerRadioInventory *inventory, uint8_t frontend_id)
     return 1;
 }
 
-void scanner_radio_close_all(ScannerRadioInventory *inventory)
+static int close_all_checked(ScannerRadioInventory *inventory)
 {
     size_t index;
+    int success = 1;
     if (inventory == NULL)
     {
         LG('!', "Radio close failed: invalid inventory");
-        return;
+        return 0;
     }
 
     for (index = 0; index < inventory->count; ++index)
@@ -522,7 +562,10 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
         if (frontend->backend == SCANNER_RADIO_BACKEND_HACKRF)
         {
             if (hackrf_close((hackrf_device *)frontend->device_handle) != HACKRF_SUCCESS)
+            {
                 LG('!', "HackRF handle close failed frontend=%u", (unsigned int)frontend->id);
+                success = 0;
+            }
         }
 #endif
         frontend->device_handle = NULL;
@@ -539,13 +582,23 @@ void scanner_radio_close_all(ScannerRadioInventory *inventory)
 #ifdef SCANNER_HAVE_HACKRF
     if (inventory->hackrf_initialized)
     {
-        hackrf_exit();
+        if (hackrf_exit() != HACKRF_SUCCESS)
+        {
+            LG('!', "HackRF library shutdown failed");
+            success = 0;
+        }
         inventory->hackrf_initialized = 0;
         LG('*', "HackRF library shut down");
     }
 #endif
     inventory->active_id = SCANNER_RADIO_ID_NONE;
-    LG('+', "All radio handles closed");
+    LG(success ? '+' : '!', "Radio close completed status=%s", success ? "OK" : "failed");
+    return success;
+}
+
+void scanner_radio_close_all(ScannerRadioInventory *inventory)
+{
+    (void)close_all_checked(inventory);
 }
 
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory)

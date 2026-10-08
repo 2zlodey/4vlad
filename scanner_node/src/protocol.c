@@ -371,6 +371,58 @@ int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint3
 
 static uint16_t read_u16_le(const uint8_t *input) { return (uint16_t)((uint16_t)input[0] | ((uint16_t)input[1] << 8)); }
 
+int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != 5 || bytes[4] != SCANNER_REINITIALIZE_SDR_COMMAND)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    return 1;
+}
+
+size_t scanner_encode_reinitialize_response(uint8_t output[6], uint32_t request_id, uint8_t status)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_REINITIALIZE_SDR_COMMAND;
+    output[5] = status;
+    return 6;
+}
+
+int scanner_decode_commutator_request(const uint8_t *bytes, size_t size, ScannerCommutatorRequest *request)
+{
+    uint8_t command;
+    if (bytes == NULL || request == NULL || size < 5)
+        return 0;
+    command = bytes[4];
+    if (size != 7 || (command != SCANNER_SELECT_ANTENNA_COMMAND && command != SCANNER_SET_PATH_COMMAND))
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->command = command;
+    request->channel = bytes[5];
+    request->value = bytes[6];
+    return 1;
+}
+
+size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request,
+                                          uint8_t status, uint8_t applied_antenna, int16_t power_cdb)
+{
+    if (output == NULL || request == NULL
+        || (request->command != SCANNER_SELECT_ANTENNA_COMMAND && request->command != SCANNER_SET_PATH_COMMAND))
+        return 0;
+    write_le(output, request->request_id, 4);
+    output[4] = request->command;
+    output[5] = status;
+    output[6] = request->channel;
+    if (request->command == SCANNER_SELECT_ANTENNA_COMMAND)
+    {
+        output[7] = status == SCANNER_RADIO_STATUS_OK ? applied_antenna : 0;
+        return 8;
+    }
+    write_le(output + 7, status == SCANNER_RADIO_STATUS_OK ? (uint16_t)power_cdb : 0, 2);
+    return 9;
+}
+
 static int decode_get_value_request(const uint8_t *bytes, size_t size, uint8_t opcode, uint32_t *request_id,
                                     uint8_t *channel)
 {
