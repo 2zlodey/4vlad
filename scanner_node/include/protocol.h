@@ -327,8 +327,8 @@ int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRe
 int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request);
 size_t scanner_encode_reinitialize_response(uint8_t output[6], uint32_t request_id, uint8_t status);
 int scanner_decode_commutator_request(const uint8_t *bytes, size_t size, ScannerCommutatorRequest *request);
-size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request,
-                                          uint8_t status, uint8_t applied_antenna, int16_t power_cdb);
+size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request, uint8_t status,
+                                          uint8_t applied_antenna, int16_t power_cdb);
 int scanner_decode_set_frequency_request(const uint8_t *bytes, size_t size, ScannerSetFrequencyRequest *request);
 int scanner_decode_get_frequency_request(const uint8_t *bytes, size_t size, ScannerGetFrequencyRequest *request);
 int scanner_decode_set_sample_rate_request(const uint8_t *bytes, size_t size, ScannerSetU32Request *request);

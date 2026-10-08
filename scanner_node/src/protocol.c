@@ -404,8 +404,8 @@ int scanner_decode_commutator_request(const uint8_t *bytes, size_t size, Scanner
     return 1;
 }
 
-size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request,
-                                          uint8_t status, uint8_t applied_antenna, int16_t power_cdb)
+size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request, uint8_t status,
+                                          uint8_t applied_antenna, int16_t power_cdb)
 {
     if (output == NULL || request == NULL
         || (request->command != SCANNER_SELECT_ANTENNA_COMMAND && request->command != SCANNER_SET_PATH_COMMAND))

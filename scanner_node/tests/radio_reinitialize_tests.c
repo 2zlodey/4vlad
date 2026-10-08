@@ -47,12 +47,11 @@ int main(void)
     frontend->capture_buffer = malloc(128);
     if (frontend->capture_buffer == NULL)
         return 6;
-    if (!scanner_radio_reinitialize(&inventory) || inventory.active_id != 0
-        || frontend->device_handle == NULL || frontend->capture_buffer != NULL
-        || frontend->frequency_configured || frontend->sample_rate_configured || frontend->bandwidth_configured
-        || frontend->lna_gain_configured || frontend->vga_gain_configured
-        || frontend->configured_frequency_hz || frontend->configured_sample_rate_hz
-        || frontend->configured_bandwidth_hz || frontend->configured_lna_gain_db || frontend->configured_vga_gain_db
+    if (!scanner_radio_reinitialize(&inventory) || inventory.active_id != 0 || frontend->device_handle == NULL
+        || frontend->capture_buffer != NULL || frontend->frequency_configured || frontend->sample_rate_configured
+        || frontend->bandwidth_configured || frontend->lna_gain_configured || frontend->vga_gain_configured
+        || frontend->configured_frequency_hz || frontend->configured_sample_rate_hz || frontend->configured_bandwidth_hz
+        || frontend->configured_lna_gain_db || frontend->configured_vga_gain_db
         || scanner_radio_get_sample_rate(&inventory, 0, &actual) != -1
         || scanner_radio_capture_iq(&inventory, 0, 64, iq, sizeof(iq), &iq_size, &format, 2000))
         return 7;

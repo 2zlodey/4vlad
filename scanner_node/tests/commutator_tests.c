@@ -20,20 +20,18 @@ int main(void)
         uint8_t response[9];
         ScannerCommutatorRequest request;
         size_t size = 7;
-        if (!scanner_decode_commutator_request(packet, size, &request)
-            || request.request_id != UINT32_C(0x12345678) || request.command != commands[index]
-            || request.channel != 1 || request.value != 255)
+        if (!scanner_decode_commutator_request(packet, size, &request) || request.request_id != UINT32_C(0x12345678)
+            || request.command != commands[index] || request.channel != 1 || request.value != 255)
             return 2;
         memset(response, 0xcc, sizeof(response));
         if (scanner_encode_commutator_response(response, &request, SCANNER_RADIO_STATUS_UNSUPPORTED, 255, -123)
                 != response_sizes[index]
-            || memcmp(response, packet, 5) != 0 || response[5] != SCANNER_RADIO_STATUS_UNSUPPORTED
-            || response[6] != 1 || response[7] != 0 || (index == 1 && response[8] != 0))
+            || memcmp(response, packet, 5) != 0 || response[5] != SCANNER_RADIO_STATUS_UNSUPPORTED || response[6] != 1
+            || response[7] != 0 || (index == 1 && response[8] != 0))
             return 3;
         if (scanner_encode_commutator_response(response, &request, SCANNER_RADIO_STATUS_OK, 255, -123)
                 != response_sizes[index]
-            || (index == 0 && response[7] != 255)
-            || (index == 1 && (response[7] != 0x85 || response[8] != 0xff)))
+            || (index == 0 && response[7] != 255) || (index == 1 && (response[7] != 0x85 || response[8] != 0xff)))
             return 4;
         if (scanner_decode_commutator_request(packet, size - 1, &request)
             || scanner_decode_commutator_request(packet, size + 1, &request))
@@ -42,8 +40,7 @@ int main(void)
         if (scanner_decode_commutator_request(packet, size, &request))
             return 6;
     }
-    if (scanner_decode_commutator_request(NULL, 0, NULL)
-        || scanner_encode_commutator_response(NULL, NULL, 0, 0, 0))
+    if (scanner_decode_commutator_request(NULL, 0, NULL) || scanner_encode_commutator_response(NULL, NULL, 0, 0, 0))
         return 7;
     puts("Commutator placeholder and protocol tests passed");
     return 0;

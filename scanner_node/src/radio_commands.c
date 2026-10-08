@@ -1,12 +1,13 @@
 #include "radio_commands.h"
-#include "commutator.h"
 #include "analysis_worker.h"
+#include "commutator.h"
 #include "iq_recording.h"
 #include "perf_probe.h"
 #include "protocol.h"
 #include "radio_frontend.h"
 #include "scanner_log.h"
 #include "signal_classifier.h"
+
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -148,15 +149,15 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         {
             if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND)
                 result = scanner_commutator_select_antenna(commutator_request.channel, commutator_request.value,
-                                                            &applied_antenna);
+                                                           &applied_antenna);
             else
                 result = scanner_commutator_set_path(commutator_request.channel, commutator_request.value, &power_cdb);
-            status = result == SCANNER_COMMUTATOR_OK ? SCANNER_RADIO_STATUS_OK
+            status = result == SCANNER_COMMUTATOR_OK            ? SCANNER_RADIO_STATUS_OK
                      : result == SCANNER_COMMUTATOR_UNSUPPORTED ? SCANNER_RADIO_STATUS_UNSUPPORTED
-                                                               : SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+                                                                : SCANNER_RADIO_STATUS_HARDWARE_ERROR;
         }
-        response_size = scanner_encode_commutator_response(response, &commutator_request, status,
-                                                            applied_antenna, power_cdb);
+        response_size = scanner_encode_commutator_response(response, &commutator_request, status, applied_antenna,
+                                                           power_cdb);
         return store_worker_response(worker_result, response, response_size);
     }
 

@@ -596,10 +596,7 @@ static int close_all_checked(ScannerRadioInventory *inventory)
     return success;
 }
 
-void scanner_radio_close_all(ScannerRadioInventory *inventory)
-{
-    (void)close_all_checked(inventory);
-}
+void scanner_radio_close_all(ScannerRadioInventory *inventory) { (void)close_all_checked(inventory); }
 
 const ScannerRadioFrontend *scanner_radio_active(const ScannerRadioInventory *inventory)
 {
