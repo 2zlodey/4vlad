@@ -23,7 +23,8 @@ $cJsonRoot = Join-Path $familyRoot 'cJSON'
 $deviceJson = Join-Path $familyRoot 'device.json'
 $ssh = (Get-Command ssh -ErrorAction Stop).Source
 $scp = (Get-Command scp -ErrorAction Stop).Source
-$sshOptions = @('-i', $IdentityFile, '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10')
+$sshOptions = @('-i', $IdentityFile, '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=10',
+    '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $remoteRunRoot = "$RemoteRoot/run_$stamp"
 $remoteNode = "$remoteRunRoot/scanner_node"
@@ -79,6 +80,8 @@ Invoke-Checked $scp ($sshOptions + @(
     (Join-Path $projectRoot 'tools\sdr_sweep_benchmark.c'),
     (Join-Path $projectRoot 'tools\record_iq_from_frontend.py'),
     (Join-Path $projectRoot 'tools\demo_server_mock.py'),
+    (Join-Path $projectRoot 'tools\radio_e2e_test.py'),
+    (Join-Path $projectRoot 'tools\logging_e2e_test.py'),
     "${PiHost}:$remoteTools/"
 ))
 Invoke-Checked $scp ($sshOptions + @(

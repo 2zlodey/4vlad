@@ -2,6 +2,7 @@
 param(
     [switch]$SkipPython,
     [switch]$RunE2E,
+    [switch]$RunLoggingE2E,
     [ValidateRange(0, 255)]
     [int]$FrontendId = 0
 )
@@ -35,17 +36,24 @@ if (-not $SkipPython) {
         '-p', 'test_demo_server_mock.py', '-v')
 }
 
-if ($RunE2E) {
+if ($RunE2E -or $RunLoggingE2E) {
     if (-not $python) {
         $python = Join-Path $workspaceRoot '.venv\Scripts\python.exe'
         if (-not (Test-Path $python)) {
             $python = (Get-Command python -ErrorAction Stop).Source
         }
     }
-    Invoke-Checked $python @((Join-Path $projectRoot 'tools\radio_e2e_test.py'),
-        '--client', (Join-Path $buildDir 'scanner_node.exe'),
-        '--device-json', (Join-Path $projectRoot '..\device.json'),
-        '--frontend-id', "$FrontendId")
+    if ($RunLoggingE2E) {
+        if ($FrontendId -ne 0) { throw '-RunLoggingE2E currently starts with frontend 0; omit -FrontendId.' }
+        Invoke-Checked $python @((Join-Path $projectRoot 'tools\logging_e2e_test.py'),
+            '--client', (Join-Path $buildDir 'scanner_node.exe'),
+            '--device-json', (Join-Path $projectRoot '..\device.json'))
+    } else {
+        Invoke-Checked $python @((Join-Path $projectRoot 'tools\radio_e2e_test.py'),
+            '--client', (Join-Path $buildDir 'scanner_node.exe'),
+            '--device-json', (Join-Path $projectRoot '..\device.json'),
+            '--frontend-id', "$FrontendId")
+    }
 }
 
 Write-Host 'Local verification passed.'
