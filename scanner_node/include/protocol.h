@@ -49,7 +49,7 @@
 /* Acknowledge shutdown, then close devices and terminate the session.
  * Req: none (5 bytes total). Resp: no fields after status (6 bytes total).
  */
-#define SCANNER_EXIT_COMMAND 0x06u
+#define SCANNER_EXIT_COMMAND 0xdeu
 
 /* Tune RX to a frequency in whole kHz; request and response use DIFFERENT units.
  * Req: channel:u8, frequency_khz:u32. Resp: channel:u8, applied_frequency_hz:u64.

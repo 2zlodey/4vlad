@@ -48,6 +48,8 @@ The session reply is length-checked and its sender endpoint is checked, but the 
 
 These experimental commands use little-endian `RequestId`; the C# DemoServer does not yet dispatch them. The Python mock supports them with `--radio-commands`. Commands are accepted only from the configured server endpoint. Unknown or malformed command datagrams are ignored.
 
+Implemented command numbers match the original XLSX catalog, including `EXIT` (`0xDE`, formerly `0x06`). Packet framing still uses this client's `RequestId` and response status; opcode alignment alone does not make it wire-compatible with the bare XLSX packets. `0x04`, `0x05`, `0x6E`, `0x70`, `0x71` are non-conflicting extensions. Original commands `0x69`, `0xC8`, `0xC9` are not implemented. Clients must now send `0xDE` for EXIT; the old `0x06` is ignored.
+
 ### Command Frames
 
 | Opcode | Name | Server-to-client request | Client-to-server response |
@@ -67,7 +69,7 @@ These experimental commands use little-endian `RequestId`; the C# DemoServer doe
 | `0x03` | `SWEEP` | 18 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, start_khz:u32 LE, stop_khz:u32 LE, step_khz:u32 LE` | `9 + count*6` bytes: header `[request_id:u32 LE, opcode, status, channel, count:u16 LE]`, followed by `[frequency_khz:u32 LE, power_cdbfs:i16 LE]` points; `power_cdbfs` contains the DSP noise-floor estimate. |
 | `0x70` | `GET_RAW_IQ` | 8 bytes: `request_id:u32 LE, opcode:u8, RX channel:u8, complex_pairs:u16 LE` | 10-byte header `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE]` followed by interleaved I/Q bytes. |
 | `0x71` | `SAVE_IQ_TO_FILE` | Same 8-byte request as `GET_RAW_IQ` | 14 bytes: `[request_id:u32 LE, opcode, status, channel, format:u8, complex_pairs:u16 LE, payload_bytes:u32 LE]`; samples are written locally, not returned over UDP. |
-| `0x06` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
+| `0xDE` | `EXIT` | 5 bytes: `request_id:u32 LE, opcode:u8` | 6 bytes: `request_id:u32 LE, opcode:u8, status:u8` |
 
 For `GET_RADIO_FRONTENDS`, status `0` means success. For `SET_ACTIVE_RADIO`, status `0` means selected and `2` means the ID is not present. For `EXIT`, status `0` confirms that the client accepted the shutdown request. Radio status values are `0` success, `1` invalid, `2` not found, `3` not configured, `4` no active frontend, `5` invalid RX channel, `6` outside range or unsupported discrete value, `7` backend operation failed, `8` operation unsupported, and `9` capture failed. `active_id=0xff` means no frontend has been selected. The selection is held in process memory; selecting it alone does not start a stream or transmit RF.
 
@@ -539,7 +541,7 @@ Successful production-server exchange verified on 2026-09-30 from the remote Ras
 ./scanner_node --server 82.165.20.164 --device-json ../scanner-node-build/device.json
 ```
 
-The one-shot client used for this historical test sent a 626-byte handshake, accepted the 52-byte session reply, answered VER request `3` with a 14-byte `1.0.0.0` response, and then exited. The server logged device ID `12345`, accepted VER, and reported `Application channel is ready`. It observed the client's public/NAT endpoint as `89.129.2.140:3333`; the configured server destination was `82.165.20.164:2653`. The current client continues listening after VER and waits for `EXIT` (`0x06`); the C# DemoServer does not yet send this command. This historical log verifies handshake/session/VER only, not radio commands.
+The one-shot client used for this historical test sent a 626-byte handshake, accepted the 52-byte session reply, answered VER request `3` with a 14-byte `1.0.0.0` response, and then exited. The server logged device ID `12345`, accepted VER, and reported `Application channel is ready`. It observed the client's public/NAT endpoint as `89.129.2.140:3333`; the configured server destination was `82.165.20.164:2653`. The current client continues listening after VER and waits for `EXIT` (`0xDE`); the C# DemoServer does not yet send this command. This historical log verifies handshake/session/VER only, not radio commands.
 
 If a later run reports `INCOMPATIBLE_VERSION` or times out, verify the server's expected assembly version, IPv4 endpoint, UDP/2653 firewall rules, and that the C# server is listening.
 

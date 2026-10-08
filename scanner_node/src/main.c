@@ -144,7 +144,7 @@ static int run_node(const ScannerOptions *options)
     }
     result = 1;
     socket_handle.log_command_frames = 1;
-    LG('i', "Waiting for radio commands; Exit (0x06) closes the session");
+    LG('i', "Waiting for radio commands; Exit (0x%02x) closes the session", (unsigned int)SCANNER_EXIT_COMMAND);
     if (!scanner_analysis_worker_start(&analysis_worker, error, sizeof(error)))
     {
         LGF("%s", error);

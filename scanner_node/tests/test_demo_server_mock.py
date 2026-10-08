@@ -31,6 +31,10 @@ from tools.demo_server_mock import (  # noqa: E402
 
 
 class DemoServerMockTests(unittest.TestCase):
+    def test_exit_opcode_matches_original_protocol(self):
+        self.assertEqual(build_exit_request(1), b"\x01\x00\x00\x00\xde")
+        self.assertEqual(build_exit_response(1), b"\x01\x00\x00\x00\xde\x00")
+
     def test_gain_fields_preserve_signed_bladerf_gain_and_zero_vga(self):
         payload = struct.pack("<IBBBbb", 17, GET_GAIN_STAGES_COMMAND, 0, 0, -15, 0)
         self.assertTrue(validate_gain_stages_response(payload, 17, 0, -15, 0))

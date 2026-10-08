@@ -25,7 +25,8 @@ int main(int argc, char **argv)
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
     const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
     const uint8_t frontends_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
-    const uint8_t exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
+    const uint8_t exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0xde };
+    const uint8_t obsolete_exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
     const uint8_t save_iq_request_bytes[8] = { 0x78, 0x56, 0x34, 0x12, SCANNER_SAVE_IQ_TO_FILE_COMMAND, 2, 64, 0 };
     const uint8_t set_frequency_request_bytes[10] = { 0xdd, 0xcc, 0xbb, 0xaa, SCANNER_SET_FREQUENCY_COMMAND,
                                                       1,    0xa0, 0x86, 0x01, 0x00 };
@@ -145,6 +146,9 @@ int main(int argc, char **argv)
     ok &= require_true(scanner_decode_exit_request(exit_request_bytes, sizeof(exit_request_bytes), &exit_request)
                            && exit_request.request_id == 11,
                        "Valid Exit request was rejected or decoded incorrectly");
+    ok &= require_true(!scanner_decode_exit_request(obsolete_exit_request_bytes, sizeof(obsolete_exit_request_bytes),
+                                                    &exit_request),
+                       "Obsolete Exit opcode 0x06 was accepted instead of XLSX opcode 0xDE");
     ok &= require_true(!scanner_decode_exit_request(frontends_request_bytes, sizeof(frontends_request_bytes),
                                                     &exit_request),
                        "Frontend query was accepted as an Exit request");
