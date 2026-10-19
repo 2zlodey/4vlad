@@ -149,7 +149,6 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
     {
         uint64_t now = monotonic_milliseconds();
         unsigned int remaining = (unsigned int)(deadline - now);
-        ScannerVerRequest request;
         uint8_t response[SCANNER_VER_RESPONSE_SIZE];
         int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
         if (result < 0)
@@ -167,13 +166,13 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
             LG('!', "Ignoring VER candidate from %s", source);
             continue;
         }
-        if (!scanner_decode_ver_request(datagram.payload, datagram.size, &request))
+        if (!scanner_decode_ver_request(datagram.payload, datagram.size))
         {
             LG('!', "Ignoring malformed or unsupported VER command datagram");
             continue;
         }
-        LG('<', "VER request %" PRIu32 " accepted", request.request_id);
-        if (!scanner_encode_ver_response(response, request.request_id, options->software_version))
+        LG('<', "VER request accepted");
+        if (scanner_encode_ver_response(response, options->software_version) != sizeof(response))
         {
             LG('!', "Invalid VER software version");
             return 0;
@@ -181,11 +180,10 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
         if (!scanner_udp_send(socket_handle, options->server_address, options->server_port, response, sizeof(response),
                               error, error_size))
         {
-            LG('!', "VER %" PRIu32 " response send failed", request.request_id);
+            LG('!', "VER response send failed");
             return 0;
         }
-        LG('>', "VER %" PRIu32 " answered with version %s (%u bytes)", request.request_id, options->software_version,
-           (unsigned int)sizeof(response));
+        LG('>', "VER answered with version %s (%u bytes)", options->software_version, (unsigned int)sizeof(response));
         return 1;
     }
     LG('!', "Timed out waiting for a valid VER request");

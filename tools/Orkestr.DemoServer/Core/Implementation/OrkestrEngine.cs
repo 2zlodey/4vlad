@@ -37,7 +37,6 @@ public sealed class OrkestrEngine : IOrkestrEngine
     private readonly IVerResponseDecoder _verDecoder;
     private readonly IVerResultHandler _verResults;
     private readonly LogSetup? _log;
-    private uint _nextRequestId = 1;
 
     #endregion
 
@@ -177,7 +176,7 @@ public sealed class OrkestrEngine : IOrkestrEngine
                     {
                         try
                         {
-                            // Send 5 bytes and wait 3000 ms for the matching 14-byte response.
+                            // Send one VER byte and wait 3000 ms for the 11-byte opcode/version response.
                             await ExchangeVerAsync(device, cancellationToken);
                         }
                         // Cancellation during the VER wait stops the process. It is not a command error.
@@ -285,8 +284,8 @@ public sealed class OrkestrEngine : IOrkestrEngine
     }
 
     /// <summary>
-    ///	Sends one VER request and waits for the matching 14-byte response.
-    ///	A different attempt id does not finish the wait. A handshake that arrives during the wait
+    ///	Sends one VER request and waits for a valid 11-byte response.
+    ///	A handshake that arrives during the wait
     ///	is registered and answered, and does not start a second VER.
     ///	On timeout or an incompatible version the registry record stays.
     /// </summary>
@@ -295,17 +294,13 @@ public sealed class OrkestrEngine : IOrkestrEngine
     /// <returns>A task that completes when the command finishes, times out, or the version does not match.</returns>
     private async Task ExchangeVerAsync(ConnectedDevice device, CancellationToken cancellationToken)
     {
-        // The first command of the process uses id 1. Zero is not issued.
-        var requestId = _nextRequestId;
-        _nextRequestId = _nextRequestId == uint.MaxValue ? 1u : _nextRequestId + 1u;
-
-        // Build 5 bytes. The encoder does not choose the address.
-        var request = _verEncoder.Encode(new VerRequest(requestId));
+        // Build the one-byte opcode-only request. The encoder does not choose the address.
+        var request = _verEncoder.Encode(new VerRequest());
 
         // Record the attempt before the datagram leaves.
         _logger.Information(
             LogSource.From(this),
-            $"VER request {requestId} to {device.IpAddress}:{device.HandShake.Port}");
+            $"VER request to {device.IpAddress}:{device.HandShake.Port}");
 
         // Send to the record IP and HandShake.Port. One attempt only.
         await _transport.SendAsync(
@@ -318,7 +313,7 @@ public sealed class OrkestrEngine : IOrkestrEngine
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         wait.CancelAfter(EngineOptions.DefaultVerTimeoutMilliseconds);
 
-        // Keep reading until the matching response, the deadline, or a process stop.
+        // Keep reading until a valid response, the deadline, or a process stop.
         while (true)
         {
             Datagram reply;
@@ -367,7 +362,7 @@ public sealed class OrkestrEngine : IOrkestrEngine
                 continue;
             }
 
-            // Any length other than 14 leaves the attempt open.
+            // Any length other than 11 leaves the VER wait open.
             if (reply.Payload.Length != VerLayout.ResponseSize)
             {
                 _logger.Information(
@@ -376,22 +371,13 @@ public sealed class OrkestrEngine : IOrkestrEngine
                 continue;
             }
 
-            // Read the attempt id and the ten version bytes.
+            // Read the opcode and the ten version bytes.
             var response = _verDecoder.Decode(reply.Payload);
-
-            // A different id does not close this attempt.
-            if (response.RequestId != requestId)
-            {
-                _logger.Information(
-                    LogSource.From(this),
-                    $"VER ignored response {response.RequestId}");
-                continue;
-            }
 
             // Log the trimmed version text before the handler result.
             _logger.Information(
                 LogSource.From(this),
-                $"VER response {requestId} version {SoftwareVersion.Format(response.Version)}");
+                $"VER response version {SoftwareVersion.Format(response.Version)}");
 
             // Compare the raw bytes with the constant. The handler does not log.
             var status = _verResults.Handle(response);

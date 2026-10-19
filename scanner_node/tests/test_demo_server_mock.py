@@ -56,20 +56,21 @@ class DemoServerMockTests(unittest.TestCase):
         with self.assertRaises(MockProtocolError):
             parse_handshake(b"short")
 
-    def test_ver_request_and_response_are_little_endian_and_padded(self):
-        request = build_ver_request(0x12345678)
-        response = build_ver_response(0x12345678, "1.0.0.0")
+    def test_ver_request_is_opcode_only_and_response_has_ten_version_bytes(self):
+        request = build_ver_request()
+        response = build_ver_response("1.0.0.0")
 
-        self.assertEqual(request, b"\x78\x56\x34\x12\x01")
-        self.assertEqual(response, b"\x78\x56\x34\x12" + b"1.0.0.0\0\0\0")
-        validate_ver_response(response, 0x12345678, "1.0.0.0")
+        self.assertEqual(request, b"\x01")
+        self.assertEqual(response, b"\x01" + b"1.0.0.0\0\0\0")
+        validate_ver_response(response, "1.0.0.0")
 
-    def test_rejects_wrong_ver_id_or_version(self):
-        response = build_ver_response(8, "1.0.0.0")
+    def test_rejects_wrong_ver_opcode_or_version(self):
+        response = build_ver_response("1.0.0.0")
+        response = b"\x02" + response[1:]
         with self.assertRaises(MockProtocolError):
-            validate_ver_response(response, 9, "1.0.0.0")
+            validate_ver_response(response, "1.0.0.0")
         with self.assertRaises(MockProtocolError):
-            validate_ver_response(response, 8, "1.0.0.1")
+            validate_ver_response(build_ver_response("1.0.0.0"), "1.0.0.1")
 
     def test_udp_handshake_session_and_ver_exchange(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -99,8 +100,8 @@ class DemoServerMockTests(unittest.TestCase):
             session, _ = client.recvfrom(1024)
             request, _ = client.recvfrom(1024)
             self.assertEqual(len(session), 52)
-            self.assertEqual(request, build_ver_request(1))
-            client.sendto(build_ver_response(1, "1.0.0.0"), server.getsockname())
+            self.assertEqual(request, build_ver_request())
+            client.sendto(build_ver_response("1.0.0.0"), server.getsockname())
             exit_request, _ = client.recvfrom(1024)
             self.assertEqual(exit_request, build_exit_request(2))
             client.sendto(build_exit_response(2), server.getsockname())
@@ -141,8 +142,8 @@ class DemoServerMockTests(unittest.TestCase):
             session, _ = client.recvfrom(1024)
             request, _ = client.recvfrom(1024)
             self.assertEqual(len(session), 52)
-            self.assertEqual(request, build_ver_request(7))
-            client.sendto(build_ver_response(7, "1.0.0.0"), server.getsockname())
+            self.assertEqual(request, build_ver_request())
+            client.sendto(build_ver_response("1.0.0.0"), server.getsockname())
 
             query, _ = client.recvfrom(1024)
             self.assertEqual(query, build_radio_frontends_request(8))
@@ -164,18 +165,18 @@ class DemoServerMockTests(unittest.TestCase):
 
             set_frequency, _ = client.recvfrom(1024)
             self.assertEqual(set_frequency, build_set_frequency_request(10, 0, 100000))
-            client.sendto(build_frequency_response(10, 0x64, 0, 0, 100000000), server.getsockname())
+            client.sendto(build_frequency_response(10, 0x64, 0, 0, 100000), server.getsockname())
 
             get_frequency, _ = client.recvfrom(1024)
             self.assertEqual(get_frequency, build_get_frequency_request(11, 0))
-            client.sendto(build_frequency_response(11, 0x6A, 0, 0, 100000000), server.getsockname())
+            client.sendto(build_frequency_response(11, 0x6A, 0, 0, 100000), server.getsockname())
 
             same_selection, _ = client.recvfrom(1024)
             self.assertEqual(same_selection, build_set_active_radio_request(12, 0))
             client.sendto(build_set_active_radio_response(12, 0), server.getsockname())
             same_get, _ = client.recvfrom(1024)
             self.assertEqual(same_get, build_get_frequency_request(13, 0))
-            client.sendto(build_frequency_response(13, 0x6A, 0, 0, 100000000), server.getsockname())
+            client.sendto(build_frequency_response(13, 0x6A, 0, 0, 100000), server.getsockname())
 
             neutral, _ = client.recvfrom(1024)
             self.assertEqual(neutral, build_set_active_radio_request(14, 0xFF))

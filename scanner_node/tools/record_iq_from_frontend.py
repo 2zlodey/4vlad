@@ -107,8 +107,8 @@ def main():
             client_endpoint = (source[0], handshake["reply_port"])
             server.sendto(build_session_reply(), client_endpoint)
             request_id = 1
-            server.sendto(build_ver_request(request_id), client_endpoint)
-            validate_ver_response(receive_from(server, source), request_id, "1.0.0.0")
+            server.sendto(build_ver_request(), client_endpoint)
+            validate_ver_response(receive_from(server, source), "1.0.0.0")
 
             request_id = next_request_id(request_id)
             frontends = parse_radio_frontends_response(
@@ -130,11 +130,13 @@ def main():
 
             sample_rate = min(max(args.sample_rate_hz, frontend["sample_rate_min_hz"]),
                               frontend["sample_rate_max_hz"])
+            sample_rate_khz = (sample_rate + 500) // 1000
             request_id = next_request_id(request_id)
             response = exchange(server, client_endpoint, source,
-                                build_set_u32_request(request_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate))
-            applied_sample_rate = struct.unpack_from("<I", response, 7)[0]
-            validate_setting_response(response, request_id, SET_SAMPLE_RATE_COMMAND, 0, applied_sample_rate)
+                                build_set_u32_request(request_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_khz))
+            applied_sample_rate_khz = struct.unpack_from("<I", response, 7)[0]
+            validate_setting_response(response, request_id, SET_SAMPLE_RATE_COMMAND, 0, applied_sample_rate_khz)
+            applied_sample_rate = applied_sample_rate_khz * 1000
 
             bandwidth = args.bandwidth_hz
             if frontend["bandwidth_options"]:

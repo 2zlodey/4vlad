@@ -9,8 +9,9 @@
 
 #define SCANNER_HANDSHAKE_SIZE 626u
 #define SCANNER_SESSION_REPLY_SIZE 52u
-#define SCANNER_VER_REQUEST_SIZE 5u
-#define SCANNER_VER_RESPONSE_SIZE 14u
+#define SCANNER_VER_REQUEST_SIZE 1u
+#define SCANNER_VER_RESPONSE_SIZE 11u
+#define SCANNER_RADIO_REQUEST_HEADER_SIZE 5u
 
 /* Wire fields below are packed in listed order, without C struct padding.
  * Every request starts with request_id:u32, opcode:u8 (5 bytes).
@@ -26,8 +27,9 @@
  * Response values are valid on status OK; malformed requests are ignored.
  */
 
-/* Query node version during session setup.
- * Req: none (5 bytes total). Resp: version payload (14 bytes total), no radio status.
+/* Query node version during session setup; VER is not wrapped in RequestId/status.
+ * Req: [01] (1 byte). Resp: [01][10 ASCII version bytes] (11 bytes total).
+ * Short versions are zero-padded; --software-version must be 1..10 ASCII bytes.
  */
 #define SCANNER_VER_COMMAND 0x01u
 
@@ -51,28 +53,27 @@
  */
 #define SCANNER_EXIT_COMMAND 0xdeu
 
-/* Tune RX to a frequency in whole kHz; request and response use DIFFERENT units.
- * Req: channel:u8, frequency_khz:u32. Resp: channel:u8, applied_frequency_hz:u64.
+/* Tune RX to a frequency in whole kHz.
+ * Req: channel:u8, frequency_khz:u32. Resp: channel:u8, applied_frequency_khz:u32.
  * The frequency must be within the active frontend's advertised range.
  * frequency_khz: 70000..6000000 (70 MHz..6 GHz), in whole 1 kHz units;
  * also require frequency_min_hz <= frequency_khz*1000 <= frequency_max_hz.
- * Response frequency_hz: within the advertised range (common cap: 70000000..6000000000).
+ * applied_frequency_khz is rounded to the nearest whole kHz.
  */
 #define SCANNER_SET_FREQUENCY_COMMAND 0x64u
 
-/* Configure sampling rate in samples per second (Hz).
- * Req: channel:u8, sample_rate_hz:u32. Resp: channel:u8, applied_hz:u32.
+/* Configure sample rate; wire value uses kHz, backend APIs use samples/second (Hz).
+ * Req: channel:u8, sample_rate_khz:u32. Resp: channel:u8, applied_khz:u32.
  * The applied rate may differ from the requested rate due to hardware constraints.
- * sample_rate_hz: sample_rate_min_hz..sample_rate_max_hz from GET_RADIO_FRONTENDS.
- * HackRF/Stub: 2000000..20000000 Hz; tested bladeRF2: 520834..61440000 Hz.
- * The backend validates/quantizes the requested rate; arbitrary steps are not guaranteed.
+ * Convert request to Hz for descriptor/backend validation; applied_khz is rounded
+ * to nearest whole kHz. Capability descriptor rate limits/steps remain in Hz.
  */
 #define SCANNER_SET_SAMPLE_RATE_COMMAND 0x65u
 
-/* Read current RX frequency in Hz, without tuning or capturing samples.
- * Req: channel:u8. Resp: channel:u8, frequency_hz:u64.
+/* Read current RX frequency in whole kHz without tuning or capturing samples.
+ * Req: channel:u8. Resp: channel:u8, frequency_khz:u32, rounded to nearest kHz.
  * BladeRF reads hardware; HackRF returns the last successful SET, or NOT_CONFIGURED.
- * Successful frequency_hz: frequency_min_hz..frequency_max_hz (70 MHz..6 GHz cap).
+ * Capability descriptor frequency limits remain in Hz.
  */
 #define SCANNER_GET_FREQUENCY_COMMAND 0x6au
 
@@ -149,8 +150,8 @@
  */
 #define SCANNER_GET_GAIN_STAGES_COMMAND 0x6eu
 
-/* Read configured sampling rate in Hz; no capture is performed.
- * Req: channel:u8. Resp: channel:u8, sample_rate_hz:u32.
+/* Read configured sampling rate in kHz; no capture is performed.
+ * Req: channel:u8. Resp: channel:u8, sample_rate_khz:u32, rounded to nearest kHz.
  * Before a successful SET_SAMPLE_RATE, status is NOT_CONFIGURED.
  * Successful sample_rate_hz follows the SET_SAMPLE_RATE descriptor/backend limits above.
  */
@@ -235,7 +236,7 @@ typedef struct
 typedef struct
 {
     uint32_t request_id;
-} ScannerVerRequest;
+} ScannerReinitializeRequest;
 
 typedef struct
 {
@@ -319,12 +320,12 @@ typedef struct
 
 void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
                               const ScannerDevice *device);
-int scanner_decode_ver_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request);
-int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version);
+int scanner_decode_ver_request(const uint8_t *bytes, size_t size);
+size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], const char *version);
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request);
 int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request);
 int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRequest *request);
-int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request);
+int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerReinitializeRequest *request);
 size_t scanner_encode_reinitialize_response(uint8_t output[6], uint32_t request_id, uint8_t status);
 int scanner_decode_commutator_request(const uint8_t *bytes, size_t size, ScannerCommutatorRequest *request);
 size_t scanner_encode_commutator_response(uint8_t output[9], const ScannerCommutatorRequest *request, uint8_t status,
@@ -349,8 +350,8 @@ size_t scanner_encode_radio_frontends_response(uint8_t *output, size_t output_ca
 size_t scanner_encode_set_active_radio_response(uint8_t output[7], uint32_t request_id, uint8_t status,
                                                 uint8_t active_id);
 size_t scanner_encode_exit_response(uint8_t output[6], uint32_t request_id, uint8_t status);
-size_t scanner_encode_frequency_response(uint8_t output[15], uint32_t request_id, uint8_t command, uint8_t status,
-                                         uint8_t channel, uint64_t frequency_hz);
+size_t scanner_encode_frequency_response(uint8_t output[11], uint32_t request_id, uint8_t command, uint8_t status,
+                                         uint8_t channel, uint32_t frequency_khz);
 size_t scanner_encode_u32_setting_response(uint8_t output[11], uint32_t request_id, uint8_t command, uint8_t status,
                                            uint8_t channel, uint32_t value);
 size_t scanner_encode_gain_stage_response(uint8_t output[8], uint32_t request_id, uint8_t command, uint8_t status,

@@ -61,18 +61,14 @@ void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const Scan
     }
 }
 
-int scanner_decode_ver_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request)
+int scanner_decode_ver_request(const uint8_t *bytes, size_t size)
 {
-    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE || bytes[4] != SCANNER_VER_COMMAND)
-        return 0;
-
-    request->request_id = read_u32_le(bytes);
-    return 1;
+    return bytes != NULL && size == SCANNER_VER_REQUEST_SIZE && bytes[0] == SCANNER_VER_COMMAND;
 }
 
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE
+    if (bytes == NULL || request == NULL || size != SCANNER_RADIO_REQUEST_HEADER_SIZE
         || bytes[4] != SCANNER_GET_RADIO_FRONTENDS_COMMAND)
         return 0;
 
@@ -82,7 +78,7 @@ int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, Sc
 
 int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE + 1u
+    if (bytes == NULL || request == NULL || size != SCANNER_RADIO_REQUEST_HEADER_SIZE + 1u
         || bytes[4] != SCANNER_SET_ACTIVE_RADIO_COMMAND)
         return 0;
 
@@ -93,7 +89,8 @@ int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, S
 
 int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != SCANNER_VER_REQUEST_SIZE || bytes[4] != SCANNER_EXIT_COMMAND)
+    if (bytes == NULL || request == NULL || size != SCANNER_RADIO_REQUEST_HEADER_SIZE
+        || bytes[4] != SCANNER_EXIT_COMMAND)
         return 0;
 
     request->request_id = read_u32_le(bytes);
@@ -206,8 +203,8 @@ size_t scanner_encode_exit_response(uint8_t output[6], uint32_t request_id, uint
     return 6;
 }
 
-size_t scanner_encode_frequency_response(uint8_t output[15], uint32_t request_id, uint8_t command, uint8_t status,
-                                         uint8_t channel, uint64_t frequency_hz)
+size_t scanner_encode_frequency_response(uint8_t output[11], uint32_t request_id, uint8_t command, uint8_t status,
+                                         uint8_t channel, uint32_t frequency_khz)
 {
     if (output == NULL || (command != SCANNER_SET_FREQUENCY_COMMAND && command != SCANNER_GET_FREQUENCY_COMMAND))
         return 0;
@@ -215,8 +212,8 @@ size_t scanner_encode_frequency_response(uint8_t output[15], uint32_t request_id
     output[4] = command;
     output[5] = status;
     output[6] = channel;
-    write_le(output + 7, frequency_hz, 8);
-    return 15;
+    write_le(output + 7, frequency_khz, 4);
+    return 11;
 }
 
 size_t scanner_encode_u32_setting_response(uint8_t output[11], uint32_t request_id, uint8_t command, uint8_t status,
@@ -345,7 +342,7 @@ size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t 
     return required_size;
 }
 
-int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)
+size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], const char *version)
 {
     size_t length;
     size_t index;
@@ -363,17 +360,18 @@ int scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint3
             return 0;
     }
 
-    memset(output, 0, SCANNER_VER_RESPONSE_SIZE);
-    write_le(output, request_id, 4);
-    memcpy(output + 4, version, length);
-    return 1;
+    output[0] = SCANNER_VER_COMMAND;
+    memset(output + 1, 0, 10);
+    memcpy(output + 1, version, length);
+    return SCANNER_VER_RESPONSE_SIZE;
 }
 
 static uint16_t read_u16_le(const uint8_t *input) { return (uint16_t)((uint16_t)input[0] | ((uint16_t)input[1] << 8)); }
 
-int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerVerRequest *request)
+int scanner_decode_reinitialize_request(const uint8_t *bytes, size_t size, ScannerReinitializeRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != 5 || bytes[4] != SCANNER_REINITIALIZE_SDR_COMMAND)
+    if (bytes == NULL || request == NULL || size != SCANNER_RADIO_REQUEST_HEADER_SIZE
+        || bytes[4] != SCANNER_REINITIALIZE_SDR_COMMAND)
         return 0;
     request->request_id = read_u32_le(bytes);
     return 1;

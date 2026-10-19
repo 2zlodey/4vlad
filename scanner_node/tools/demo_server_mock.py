@@ -11,8 +11,8 @@ import time
 
 HANDSHAKE_SIZE = 626
 SESSION_REPLY_SIZE = 52
-VER_REQUEST_SIZE = 5
-VER_RESPONSE_SIZE = 14
+VER_REQUEST_SIZE = 1
+VER_RESPONSE_SIZE = 11
 VER_COMMAND = 0x01
 RADIO_FRONTENDS_COMMAND = 0x04
 SET_ACTIVE_RADIO_COMMAND = 0x05
@@ -68,37 +68,34 @@ def build_session_reply():
     return key + nonce + struct.pack("<q", timestamp_ms)
 
 
-def build_ver_request(request_id):
-    return struct.pack("<IB", request_id, VER_COMMAND)
+def build_ver_request():
+    return bytes((VER_COMMAND,))
 
 
-def build_ver_response(request_id, version):
+def build_ver_response(version):
     try:
         version_bytes = version.encode("ascii")
     except UnicodeEncodeError as error:
         raise MockProtocolError("software version must be ASCII") from error
     if not version_bytes or len(version_bytes) > 10:
         raise MockProtocolError("software version must contain 1 to 10 ASCII bytes")
-    return struct.pack("<I", request_id) + version_bytes.ljust(10, b"\0")
+    return bytes((VER_COMMAND,)) + version_bytes.ljust(10, b"\0")
 
 
-def validate_ver_response(payload, expected_id, expected_version):
+def validate_ver_response(payload, expected_version):
     if len(payload) != VER_RESPONSE_SIZE:
         raise MockProtocolError(
             "VER response has {} bytes, expected {}".format(
                 len(payload), VER_RESPONSE_SIZE
             )
         )
-    actual_id = struct.unpack_from("<I", payload)[0]
-    if actual_id != expected_id:
-        raise MockProtocolError(
-            "VER RequestId mismatch: got {}, expected {}".format(actual_id, expected_id)
-        )
-    expected_version_bytes = build_ver_response(expected_id, expected_version)[4:]
-    if payload[4:] != expected_version_bytes:
+    if payload[0] != VER_COMMAND:
+        raise MockProtocolError("VER response opcode mismatch")
+    expected_version_bytes = build_ver_response(expected_version)[1:]
+    if payload[1:] != expected_version_bytes:
         raise MockProtocolError(
             "VER version mismatch: got {!r}, expected {!r}".format(
-                payload[4:], expected_version_bytes
+                payload[1:], expected_version_bytes
             )
         )
 
@@ -177,18 +174,18 @@ def build_get_frequency_request(request_id, channel):
     return struct.pack("<IBB", request_id, GET_FREQUENCY_COMMAND, channel)
 
 
-def build_frequency_response(request_id, command, status, channel, frequency_hz):
-    return struct.pack("<IBBBQ", request_id, command, status, channel, frequency_hz)
+def build_frequency_response(request_id, command, status, channel, frequency_khz):
+    return struct.pack("<IBBBI", request_id, command, status, channel, frequency_khz)
 
 
-def validate_frequency_response(payload, expected_id, expected_command, expected_channel, expected_frequency_hz,
+def validate_frequency_response(payload, expected_id, expected_command, expected_channel, expected_frequency_khz,
                                 expected_status=RADIO_STATUS_OK):
-    if len(payload) != 15:
-        raise MockProtocolError("frequency response has {} bytes, expected 15".format(len(payload)))
-    request_id, command, status, channel, frequency_hz = struct.unpack("<IBBBQ", payload)
+    if len(payload) != 11:
+        raise MockProtocolError("frequency response has {} bytes, expected 11".format(len(payload)))
+    request_id, command, status, channel, frequency_khz = struct.unpack("<IBBBI", payload)
     if request_id != expected_id or command != expected_command:
         raise MockProtocolError("frequency response request id or command mismatch")
-    if status != expected_status or channel != expected_channel or frequency_hz != expected_frequency_hz:
+    if status != expected_status or channel != expected_channel or frequency_khz != expected_frequency_khz:
         raise MockProtocolError("frequency response status, channel, or readback mismatch")
 
 
@@ -377,21 +374,22 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
             raise MockProtocolError("SDR reinitialization did not clear configured settings")
     request_id = next_request_id(request_id)
     response = exchange_radio_request(sock, endpoint, build_set_frequency_request(request_id, 0, frequency_khz))
-    validate_frequency_response(response, request_id, SET_FREQUENCY_COMMAND, 0, frequency_khz * 1000)
+    validate_frequency_response(response, request_id, SET_FREQUENCY_COMMAND, 0, frequency_khz)
     request_id = exercise_commutator_commands(sock, endpoint, request_id)
     sample_rate_hz = min(max(frontend["sample_rate_min_hz"], 2000000),
                          frontend["sample_rate_max_hz"])
+    sample_rate_khz = (sample_rate_hz + 500) // 1000
     sample_rate_id = next_request_id(request_id)
     response = exchange_radio_request(
         sock, endpoint,
-        build_set_u32_request(sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz),
+        build_set_u32_request(sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_khz),
     )
-    validate_setting_response(response, sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz)
+    validate_setting_response(response, sample_rate_id, SET_SAMPLE_RATE_COMMAND, 0, sample_rate_khz)
     get_sample_rate_id = next_request_id(sample_rate_id)
     response = exchange_radio_request(
         sock, endpoint, build_get_value_request(get_sample_rate_id, GET_SAMPLE_RATE_COMMAND, 0)
     )
-    validate_setting_response(response, get_sample_rate_id, GET_SAMPLE_RATE_COMMAND, 0, sample_rate_hz)
+    validate_setting_response(response, get_sample_rate_id, GET_SAMPLE_RATE_COMMAND, 0, sample_rate_khz)
 
     bandwidth_hz = frontend["bandwidth_options"][0] if frontend["bandwidth_options"] else max(
         frontend["bandwidth_min_hz"], 1000000
@@ -470,9 +468,9 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
     response = exchange_radio_request(
         sock, endpoint, build_set_frequency_request(restore_id, 0, frequency_khz)
     )
-    validate_frequency_response(response, restore_id, SET_FREQUENCY_COMMAND, 0, frequency_khz * 1000)
+    validate_frequency_response(response, restore_id, SET_FREQUENCY_COMMAND, 0, frequency_khz)
     return restore_id, {
-        "sample_rate_hz": sample_rate_hz,
+        "sample_rate_hz": sample_rate_khz * 1000,
         "bandwidth_hz": bandwidth_hz,
         "gain_readback": True,
         "sdr_reinitialized": True,
@@ -560,7 +558,7 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
     client_endpoint = (source[0], handshake["reply_port"])
 
     sock.sendto(build_session_reply(), client_endpoint)
-    sock.sendto(build_ver_request(request_id), client_endpoint)
+    sock.sendto(build_ver_request(), client_endpoint)
 
     deadline = time.monotonic() + timeout
     while True:
@@ -575,7 +573,7 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                 file=sys.stderr,
             )
             continue
-        validate_ver_response(response, request_id, version)
+        validate_ver_response(response, version)
         radio_result = None
         exit_after_id = request_id
         if radio_commands:
@@ -613,7 +611,7 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                     raise MockProtocolError("SET_FREQUENCY response came from an unexpected endpoint")
                 frequency_hz = requested_frequency_khz * 1000
                 validate_frequency_response(set_frequency_response, set_frequency_id, SET_FREQUENCY_COMMAND, 0,
-                                            frequency_hz)
+                                            requested_frequency_khz)
 
                 get_frequency_id = next_request_id(set_frequency_id)
                 sock.sendto(build_get_frequency_request(get_frequency_id, 0), client_endpoint)
@@ -621,7 +619,7 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                 if get_frequency_source != source:
                     raise MockProtocolError("GET_FREQUENCY response came from an unexpected endpoint")
                 validate_frequency_response(get_frequency_response, get_frequency_id, GET_FREQUENCY_COMMAND, 0,
-                                            frequency_hz)
+                                            requested_frequency_khz)
                 frequencies_hz[str(selected_id)] = frequency_hz
                 if full_radio_commands:
                     restore_id, command_results = exercise_radio_commands(
@@ -643,7 +641,8 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                 same_get_response, same_get_source = sock.recvfrom(65535)
                 if same_get_source != source:
                     raise MockProtocolError("frequency readback after same selection came from an unexpected endpoint")
-                validate_frequency_response(same_get_response, same_get_id, GET_FREQUENCY_COMMAND, 0, frequency_hz)
+                validate_frequency_response(same_get_response, same_get_id, GET_FREQUENCY_COMMAND, 0,
+                                            requested_frequency_khz)
                 request_cursor = same_get_id
 
             neutral_id = next_request_id(request_cursor)
@@ -724,7 +723,7 @@ def parse_args(argv=None):
     if not 0 <= args.select_frontend_id <= 255:
         parser.error("--select-frontend-id must be between 0 and 255")
     try:
-        build_ver_response(1, args.version)
+        build_ver_response(args.version)
     except MockProtocolError as error:
         parser.error(str(error))
     try:

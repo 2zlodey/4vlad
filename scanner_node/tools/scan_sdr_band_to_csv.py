@@ -106,9 +106,9 @@ def connect_scanner(sock, pi_address, pi_user, key_file, windows_address, port,
     parsed = parse_handshake(handshake)
     client_endpoint = (source[0], parsed["reply_port"])
     sock.sendto(build_session_reply(), client_endpoint)
-    sock.sendto(build_ver_request(1), client_endpoint)
+    sock.sendto(build_ver_request(), client_endpoint)
     ver_response, _ = receive_from_pi(sock, pi_address, timeout)
-    validate_ver_response(ver_response, 1, "1.0.0.0")
+    validate_ver_response(ver_response, "1.0.0.0")
 
     request_id = 2
     response = transact(sock, client_endpoint, pi_address,
@@ -152,8 +152,8 @@ def scan_one_frontend(sock, client_endpoint, pi_address, frontend_id, frontend_n
     # Both attached radios accept 2 MS/s and 1.75 MHz RX bandwidth.
     request_id = next_request_id(request_id)
     response = transact(sock, client_endpoint, pi_address,
-                        build_setting_request(request_id, SET_SAMPLE_RATE_COMMAND, 0, 2000000), timeout)
-    sample_rate_hz = validate_setting(response, request_id, SET_SAMPLE_RATE_COMMAND, 0, 2000000)
+                        build_setting_request(request_id, SET_SAMPLE_RATE_COMMAND, 0, 2000), timeout)
+    sample_rate_hz = validate_setting(response, request_id, SET_SAMPLE_RATE_COMMAND, 0, 2000) * 1000
     request_id = next_request_id(request_id)
     response = transact(sock, client_endpoint, pi_address,
                         build_setting_request(request_id, SET_BANDWIDTH_COMMAND, 0, 1750000), timeout)

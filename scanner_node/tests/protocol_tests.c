@@ -23,23 +23,22 @@ int main(int argc, char **argv)
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
-    const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
-    const uint8_t frontends_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
-    const uint8_t exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0xde };
-    const uint8_t obsolete_exit_request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
+    const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x01 };
+    const uint8_t frontends_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
+    const uint8_t exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0xde };
+    const uint8_t obsolete_exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
     const uint8_t save_iq_request_bytes[8] = { 0x78, 0x56, 0x34, 0x12, SCANNER_SAVE_IQ_TO_FILE_COMMAND, 2, 64, 0 };
     const uint8_t set_frequency_request_bytes[10] = { 0xdd, 0xcc, 0xbb, 0xaa, SCANNER_SET_FREQUENCY_COMMAND,
                                                       1,    0xa0, 0x86, 0x01, 0x00 };
     const uint8_t get_frequency_request_bytes[6] = { 0x0d, 0x00, 0x00, 0x00, SCANNER_GET_FREQUENCY_COMMAND, 1 };
     const uint8_t get_gain_stages_request_bytes[6] = { 0x21, 0x43, 0x65, 0x87, SCANNER_GET_GAIN_STAGES_COMMAND, 0 };
-    const uint8_t select_request_bytes[SCANNER_VER_REQUEST_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
+    const uint8_t select_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
     uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
     uint8_t select_response[7];
     uint8_t exit_response[6];
-    uint8_t frequency_response[15];
+    uint8_t frequency_response[11];
     uint8_t iq_file_response[14];
     uint8_t gain_stages_response[9];
-    ScannerVerRequest request;
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
     ScannerExitRequest exit_request;
@@ -93,19 +92,20 @@ int main(int argc, char **argv)
     ok &= require_true(handshake[0] == 0x04 && handshake[3] == 0x01, "Handshake counter is not little-endian");
     ok &= require_true(handshake[20] == 0x05 && handshake[21] == 0x0d, "Handshake reply port is not little-endian");
     ok &= require_true(handshake[22] == (uint8_t)(device.id & 0xff), "Device ID offset or byte order is incorrect");
-    ok &= require_true(scanner_decode_ver_request(request_bytes, sizeof(request_bytes), &request),
+    ok &= require_true(scanner_decode_ver_request(request_bytes, sizeof(request_bytes)),
                        "Valid VER request was rejected");
-    ok &= require_true(request.request_id == UINT32_C(0x12345678), "VER RequestId decode failed");
-    ok &= require_true(!scanner_decode_ver_request(request_bytes, 4, &request), "Short VER request was accepted");
-    ok &= require_true(scanner_encode_ver_response(response, request.request_id, "1.0.0.0"),
+    ok &= require_true(!scanner_decode_ver_request(request_bytes, 0), "Short VER request was accepted");
+    ok &= require_true(!scanner_decode_ver_request(frontends_request_bytes, sizeof(frontends_request_bytes)),
+                       "RequestId-wrapped VER was accepted");
+    ok &= require_true(scanner_encode_ver_response(response, "1.0.0.0") == sizeof(response),
                        "VER response encoding failed");
-    ok &= require_true(response[0] == 0x78 && response[3] == 0x12, "VER RequestId response is not little-endian");
-    ok &= require_true(memcmp(response + 4, "1.0.0.0", 7) == 0, "VER version bytes are incorrect");
-    for (index = 11; index < sizeof(response); ++index)
+    ok &= require_true(response[0] == SCANNER_VER_COMMAND && memcmp(response + 1, "1.0.0.0", 7) == 0,
+                       "VER opcode/version bytes are incorrect");
+    for (index = 8; index < sizeof(response); ++index)
     {
         ok &= require_true(response[index] == 0, "VER version is not zero-padded");
     }
-    ok &= require_true(!scanner_encode_ver_response(response, 1, "12345678901"), "Overlong VER version was accepted");
+    ok &= require_true(!scanner_encode_ver_response(response, "12345678901"), "Overlong VER version was accepted");
 
     memset(&inventory, 0, sizeof(inventory));
     inventory.active_id = SCANNER_RADIO_ID_NONE;
@@ -232,14 +232,13 @@ int main(int argc, char **argv)
                            && gain_stages_response[7] == 0xf1 && gain_stages_response[8] == 0,
                        "GET_GAIN_STAGES did not encode signed BladeRF gain with zero VGA");
     ok &= require_true(scanner_encode_frequency_response(frequency_response, 14, SCANNER_GET_FREQUENCY_COMMAND,
-                                                         SCANNER_RADIO_STATUS_OK, 1, UINT64_C(100000000))
+                                                         SCANNER_RADIO_STATUS_OK, 1, UINT32_C(100000))
                                == sizeof(frequency_response)
                            && frequency_response[0] == 14 && frequency_response[4] == SCANNER_GET_FREQUENCY_COMMAND
                            && frequency_response[5] == SCANNER_RADIO_STATUS_OK && frequency_response[6] == 1
-                           && frequency_response[7] == 0x00 && frequency_response[8] == 0xe1
-                           && frequency_response[9] == 0xf5 && frequency_response[10] == 0x05
-                           && frequency_response[11] == 0x00,
-                       "Frequency response does not contain exact little-endian Hz");
+                           && frequency_response[7] == 0xa0 && frequency_response[8] == 0x86
+                           && frequency_response[9] == 0x01 && frequency_response[10] == 0x00,
+                       "Frequency response does not contain exact little-endian kHz");
     ok &= require_true(scanner_radio_select(&inventory, 0) && scanner_radio_active(&inventory) != NULL,
                        "Available frontend could not be selected");
     ok &= require_true(!scanner_radio_select(&inventory, 1) && scanner_radio_active(&inventory) != NULL,

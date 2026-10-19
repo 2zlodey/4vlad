@@ -14,7 +14,7 @@ public sealed class VerResultHandler : IVerResultHandler
     /// <summary>
     ///	Compares all ten version bytes, including the trailing zeros.
     /// </summary>
-    /// <param name="response">Response whose attempt id was already accepted by the engine.</param>
+    /// <param name="response">Decoded response whose frame was accepted by the engine.</param>
     /// <returns><see cref="VerStatus.None"/> when the bytes match the constant.</returns>
     /// <exception cref="ArgumentNullException">The response is null.</exception>
     public VerStatus Handle(VerResponse response)

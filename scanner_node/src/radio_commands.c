@@ -8,12 +8,17 @@
 #include "scanner_log.h"
 #include "signal_classifier.h"
 
-
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
 #define SCANNER_CAPTURE_TIMEOUT_MS 2000u
+
+static uint32_t hz_to_khz_rounded(uint64_t frequency_hz)
+{
+    uint64_t value_khz = (frequency_hz + 500u) / 1000u;
+    return value_khz > UINT32_MAX ? UINT32_MAX : (uint32_t)value_khz;
+}
 
 static int store_worker_response(ScannerRadioWorkerResult *worker_result, const uint8_t *response, size_t response_size)
 {
@@ -120,7 +125,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     ScannerSweepRequest sweep_request;
     ScannerRawIqRequest raw_iq_request;
     ScannerCommutatorRequest commutator_request;
-    ScannerVerRequest reinitialize_request;
+    ScannerReinitializeRequest reinitialize_request;
     const ScannerRadioFrontend *active_frontend;
     ScannerRadioCommandContext *app = (ScannerRadioCommandContext *)context;
     PERF_SCOPE("radio.command");
@@ -197,6 +202,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t actual_frequency_hz = 0;
+        uint32_t actual_frequency_khz = 0;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -209,16 +215,18 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                               (uint64_t)set_frequency_request.frequency_khz * 1000u,
                                               &actual_frequency_hz))
             status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        if (status == SCANNER_RADIO_STATUS_OK)
+            actual_frequency_khz = hz_to_khz_rounded(actual_frequency_hz);
 
         response_size = scanner_encode_frequency_response(response, set_frequency_request.request_id,
                                                           SCANNER_SET_FREQUENCY_COMMAND, status,
-                                                          set_frequency_request.channel, actual_frequency_hz);
+                                                          set_frequency_request.channel, actual_frequency_khz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-           "Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%" PRIu64 " Hz",
+           "Set frequency request %" PRIu32 ": channel=%u requested=%u kHz status=%u actual=%u kHz",
            set_frequency_request.request_id, (unsigned int)set_frequency_request.channel,
-           (unsigned int)set_frequency_request.frequency_khz, (unsigned int)status, actual_frequency_hz);
+           (unsigned int)set_frequency_request.frequency_khz, (unsigned int)status, actual_frequency_khz);
         return 1;
     }
 
@@ -226,6 +234,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t frequency_hz = 0;
+        uint32_t frequency_khz = 0;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
@@ -239,16 +248,17 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             else if (get_result < 0)
                 status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
         }
+        if (status == SCANNER_RADIO_STATUS_OK)
+            frequency_khz = hz_to_khz_rounded(frequency_hz);
 
         response_size = scanner_encode_frequency_response(response, get_frequency_request.request_id,
                                                           SCANNER_GET_FREQUENCY_COMMAND, status,
-                                                          get_frequency_request.channel, frequency_hz);
+                                                          get_frequency_request.channel, frequency_khz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-           "Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%" PRIu64 " Hz",
-           get_frequency_request.request_id, (unsigned int)get_frequency_request.channel, (unsigned int)status,
-           frequency_hz);
+           "Get frequency request %" PRIu32 ": channel=%u status=%u frequency=%u kHz", get_frequency_request.request_id,
+           (unsigned int)get_frequency_request.channel, (unsigned int)status, frequency_khz);
         return 1;
     }
 
@@ -256,27 +266,31 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint32_t actual_hz = 0;
+        uint64_t requested_hz = (uint64_t)set_u32_request.value * 1000u;
+        uint32_t actual_khz = 0;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
             status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
         else if (set_u32_request.channel >= active_frontend->rx_channels)
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
-        else if (set_u32_request.value < active_frontend->sample_rate_min_hz
-                 || set_u32_request.value > active_frontend->sample_rate_max_hz)
+        else if (requested_hz > UINT32_MAX || requested_hz < active_frontend->sample_rate_min_hz
+                 || requested_hz > active_frontend->sample_rate_max_hz)
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
         else if (!(active_frontend->capabilities & SCANNER_RADIO_CAP_SAMPLE_RATE))
             status = SCANNER_RADIO_STATUS_UNSUPPORTED;
-        else if (!scanner_radio_set_sample_rate(inventory, set_u32_request.channel, set_u32_request.value, &actual_hz))
+        else if (!scanner_radio_set_sample_rate(inventory, set_u32_request.channel, (uint32_t)requested_hz, &actual_hz))
             status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        if (status == SCANNER_RADIO_STATUS_OK)
+            actual_khz = hz_to_khz_rounded(actual_hz);
         response_size = scanner_encode_u32_setting_response(response, set_u32_request.request_id,
                                                             SCANNER_SET_SAMPLE_RATE_COMMAND, status,
-                                                            set_u32_request.channel, actual_hz);
+                                                            set_u32_request.channel, actual_khz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-           "Set sample rate id=%" PRIu32 " channel=%u requested=%u Hz status=%u applied=%u Hz",
+           "Set sample rate id=%" PRIu32 " channel=%u requested=%u kHz status=%u applied=%u kHz",
            set_u32_request.request_id, (unsigned int)set_u32_request.channel, (unsigned int)set_u32_request.value,
-           (unsigned int)status, (unsigned int)actual_hz);
+           (unsigned int)status, (unsigned int)actual_khz);
         return 1;
     }
 
@@ -284,6 +298,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint32_t value_hz = 0;
+        uint32_t value_khz = 0;
         int get_result;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
@@ -300,12 +315,14 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             else if (get_result < 0)
                 status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
         }
+        if (status == SCANNER_RADIO_STATUS_OK)
+            value_khz = hz_to_khz_rounded(value_hz);
         response_size = scanner_encode_u32_setting_response(response, get_value_request.request_id,
                                                             SCANNER_GET_SAMPLE_RATE_COMMAND, status,
-                                                            get_value_request.channel, value_hz);
+                                                            get_value_request.channel, value_khz);
         LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-           "Get sample rate id=%" PRIu32 " channel=%u status=%u value=%u Hz", get_value_request.request_id,
-           (unsigned int)get_value_request.channel, (unsigned int)status, (unsigned int)value_hz);
+           "Get sample rate id=%" PRIu32 " channel=%u status=%u value=%u kHz", get_value_request.request_id,
+           (unsigned int)get_value_request.channel, (unsigned int)status, (unsigned int)value_khz);
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;

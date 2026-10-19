@@ -8,7 +8,7 @@ int main(void)
 {
     ScannerRadioInventory inventory;
     ScannerRadioFrontend *frontend;
-    ScannerVerRequest request;
+    ScannerReinitializeRequest request;
     ScannerCommutatorRequest board_request;
     const uint8_t packet[] = { 0x78, 0x56, 0x34, 0x12, 0x69 };
     const uint8_t invalid_packet[] = { 0x78, 0x56, 0x34, 0x12, 0x69, 0 };
