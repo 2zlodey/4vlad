@@ -7,11 +7,30 @@ import os
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 from demo_server_mock import serve_one
+
+
+def report_process_state(pid):
+    task_root = "/proc/{}/task".format(pid)
+    if not os.path.isdir(task_root):
+        print("Scanner process {} has already exited".format(pid), file=sys.stderr, flush=True)
+        return
+    for task_id in os.listdir(task_root):
+        task_path = os.path.join(task_root, task_id)
+        values = []
+        for name in ("comm", "wchan", "syscall"):
+            try:
+                with open(os.path.join(task_path, name), encoding="ascii") as source:
+                    value = source.read().strip().replace("\n", " ")
+            except OSError as error:
+                value = "unavailable: {}".format(error)
+            values.append("{}={}".format(name, value))
+        print("Scanner task {}: {}".format(task_id, " ".join(values)), file=sys.stderr, flush=True)
 
 
 def validate_iq_recording(path, expected_records):
@@ -99,20 +118,24 @@ def main():
     ]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     timed_out = False
+    client_exited_before_mock = False
     try:
         deadline = time.monotonic() + args.timeout
         while True:
             if errors:
+                report_process_state(process.pid)
                 process.kill()
                 stdout, stderr = process.communicate()
                 break
             if time.monotonic() >= deadline:
                 timed_out = True
+                report_process_state(process.pid)
                 process.kill()
                 stdout, stderr = process.communicate()
                 break
             try:
                 stdout, stderr = process.communicate(timeout=0.05)
+                client_exited_before_mock = not errors
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -129,6 +152,13 @@ def main():
     if worker.is_alive():
         raise SystemExit("Python mock server did not stop")
     if errors:
+        print(
+            "Scanner exit status={} exited_before_mock_timeout={}".format(
+                process.returncode, client_exited_before_mock
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
         raise SystemExit("Python mock server failed: {}".format(errors[0]))
     if timed_out:
         raise SystemExit("scanner_node exceeded the {:.1f}s E2E timeout".format(args.timeout))

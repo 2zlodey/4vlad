@@ -4,11 +4,28 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def run_radio_e2e(command, cwd, timeout, mode):
+    process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+        try:
+            stdout, stderr = process.communicate(timeout=min(5.0, remaining))
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            print("Logging E2E mode {} still running".format(mode), file=sys.stderr, flush=True)
 
 
 def main():
@@ -22,10 +39,9 @@ def main():
     prefix = re.compile(r"^\d{4}-\d{2}-\d{2}:\d{2}:\d{2}:\d{2} [!*+\-#&@i<>] \[[^\]]+\] ")
     for mode in range(4):
         with tempfile.TemporaryDirectory(prefix="scanner-log-test-") as directory:
-            result = subprocess.run(
-                [sys.executable, runner, "--client", client, "--device-json", device_json,
-                 "--debug", str(mode)], cwd=directory, capture_output=True, text=True, timeout=120,
-            )
+            command = [sys.executable, runner, "--client", client, "--device-json", device_json,
+                       "--debug", str(mode)]
+            result = run_radio_e2e(command, directory, 120, mode)
             require(result.returncode == 0, result.stdout + result.stderr)
             require(not result.stderr, "Unexpected stderr: " + result.stderr)
             output = result.stdout.splitlines()

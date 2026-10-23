@@ -20,6 +20,12 @@ if ($RemoteRoot -notmatch '^/[A-Za-z0-9_./-]+$' -or $RemoteRoot -match '(^|/)\.\
 if ($IdentityFile -and -not (Test-Path -LiteralPath $IdentityFile -PathType Leaf)) {
     throw "SSH key not found: $IdentityFile"
 }
+if (-not $IdentityFile) {
+    $defaultIdentity = Join-Path $HOME '.ssh\conductor_ed25519'
+    if (Test-Path -LiteralPath $defaultIdentity -PathType Leaf) {
+        $IdentityFile = $defaultIdentity
+    }
+}
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $familyRoot = Split-Path -Parent $projectRoot
@@ -46,6 +52,7 @@ $prepare = "set -eu; test `"`$(hostname)`" = '$ExpectedHostName'; mkdir -p '$Rem
 $build = "set -eu; test `"`$(hostname)`" = '$ExpectedHostName'; tar -xzf '$remoteRun/$archiveName' -C '$remoteRun'; sh '$remoteRun/scanner_node/devtools/setup_conductor.sh'$buildArgument"
 
 Write-Host "Target: ${SshTarget}:$Port; expected hostname=$ExpectedHostName"
+if ($IdentityFile) { Write-Host "SSH identity: $IdentityFile" }
 Write-Host "Working-tree source: $familyRoot"
 Write-Host "Deployment: $remoteRun"
 if ($DryRun) {
