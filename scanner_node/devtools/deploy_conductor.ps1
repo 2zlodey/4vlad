@@ -28,7 +28,7 @@ $manifest = @(
     'scanner_node/include', 'scanner_node/src',
     'scanner_node/perf_lib/perf_probe.c', 'scanner_node/perf_lib/perf_probe.h',
     'scanner_node/perf_lib/perf_probe_hal.h', 'scanner_node/perf_lib/perf_probe_hal_host.c',
-    'scanner_node/devtools/build_remote_stub.sh',
+    'scanner_node/devtools/build_remote_stub.sh', 'scanner_node/devtools/setup_conductor.sh',
     'scanner_node/tests/log_tests.c', 'scanner_node/tests/radio_reinitialize_tests.c',
     'scanner_node/tests/commutator_tests.c',
     'scanner_node/tools/demo_server_mock.py', 'scanner_node/tools/radio_e2e_test.py',
@@ -43,7 +43,7 @@ $remoteRun = "$($RemoteRoot.TrimEnd('/'))/$runName"
 $archiveName = "scanner_${stamp}_$PID.tar.gz"
 $buildArgument = if ($BuildOnly) { ' --build-only' } else { '' }
 $prepare = "set -eu; test `"`$(hostname)`" = '$ExpectedHostName'; mkdir -p '$RemoteRoot'; mkdir '$remoteRun'"
-$build = "set -eu; test `"`$(hostname)`" = '$ExpectedHostName'; tar -xzf '$remoteRun/$archiveName' -C '$remoteRun'; sh '$remoteRun/scanner_node/devtools/build_remote_stub.sh'$buildArgument"
+$build = "set -eu; test `"`$(hostname)`" = '$ExpectedHostName'; tar -xzf '$remoteRun/$archiveName' -C '$remoteRun'; sh '$remoteRun/scanner_node/devtools/setup_conductor.sh'$buildArgument"
 
 Write-Host "Target: ${SshTarget}:$Port; expected hostname=$ExpectedHostName"
 Write-Host "Working-tree source: $familyRoot"

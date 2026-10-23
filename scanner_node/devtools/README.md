@@ -10,7 +10,8 @@ Repeated session actions were: build + CTest + Python tests + four logging-mode 
 | --- | --- | --- |
 | Complete local regression | `verify_local.ps1 -RunLoggingE2E` | Build, all CTest targets, mock unit tests, complete UDP sessions in debug 0..3. |
 | Inspect remote deployment | `deploy_conductor.ps1 -DryRun` | Checks local inputs and displays manifest/commands without network or writes. |
-| Deploy current source to conductor | `deploy_conductor.ps1` | Scoped archive, hostname guard, isolated directory, GCC Stub build, focused C tests and four-mode E2E. |
+| Install conductor tools and deploy | `deploy_conductor.ps1` | Scoped archive, hostname guard, isolated directory, dependency setup, Stub build, focused C tests and four-mode E2E. |
+| Set up an existing conductor checkout | `sh devtools/setup_conductor.sh` | Installs Debian build/SDR dependencies if missing, then builds and tests the Stub scanner. |
 | Rebuild an existing remote source tree | `sh devtools/build_remote_stub.sh` | Publishes the binary only after successful build/tests. |
 | Local Pi hardware build/sweep | `build_pi_sweep.ps1` | SDK/CMake build; stages radio/logging E2E tools and uses SSH keepalive. |
 
