@@ -143,6 +143,7 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
                             size_t error_size)
 {
     ScannerDatagram datagram;
+    uint32_t request_id;
     uint64_t deadline = monotonic_milliseconds() + options->ver_timeout_ms;
     LG('i', "Session reply received; waiting for VER request");
     while (monotonic_milliseconds() < deadline)
@@ -166,12 +167,12 @@ static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOption
             LG('!', "Ignoring VER candidate from %s", source);
             continue;
         }
-        if (!scanner_decode_ver_request(datagram.payload, datagram.size))
+        if (!scanner_decode_ver_request(datagram.payload, datagram.size, &request_id))
         {
             LG('!', "Ignoring malformed or unsupported VER command datagram");
             continue;
         }
-        LG('<', "VER request accepted");
+        LG('<', "VER request accepted id=%" PRIu32, request_id);
         if (scanner_encode_ver_response(response, options->software_version) != sizeof(response))
         {
             LG('!', "Invalid VER software version");

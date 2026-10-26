@@ -107,7 +107,7 @@ def main():
             client_endpoint = (source[0], handshake["reply_port"])
             server.sendto(build_session_reply(), client_endpoint)
             request_id = 1
-            server.sendto(build_ver_request(), client_endpoint)
+            server.sendto(build_ver_request(1), client_endpoint)
             validate_ver_response(receive_from(server, source), "1.0.0.0")
 
             request_id = next_request_id(request_id)

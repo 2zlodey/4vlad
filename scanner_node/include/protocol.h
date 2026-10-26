@@ -27,8 +27,8 @@
  * Response values are valid on status OK; malformed requests are ignored.
  */
 
-/* Query node version during session setup; VER is not wrapped in RequestId/status.
- * Req: [01] (1 byte). Resp: [01][10 ASCII version bytes] (11 bytes total).
+/* Query node version during session setup; VER is not wrapped in status.
+ * Req: request_id:u32, opcode:0x01 (5 bytes). Resp: [01][10 ASCII version bytes] (11 bytes total).
  * Short versions are zero-padded; --software-version must be 1..10 ASCII bytes.
  */
 #define SCANNER_VER_COMMAND 0x01u
@@ -320,7 +320,7 @@ typedef struct
 
 void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
                               const ScannerDevice *device);
-int scanner_decode_ver_request(const uint8_t *bytes, size_t size);
+int scanner_decode_ver_request(const uint8_t *bytes, size_t size, uint32_t *request_id);
 size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], const char *version);
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request);
 int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request);

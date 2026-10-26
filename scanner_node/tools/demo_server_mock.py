@@ -11,7 +11,7 @@ import time
 
 HANDSHAKE_SIZE = 626
 SESSION_REPLY_SIZE = 52
-VER_REQUEST_SIZE = 1
+VER_REQUEST_SIZE = 5
 VER_RESPONSE_SIZE = 11
 VER_COMMAND = 0x01
 RADIO_FRONTENDS_COMMAND = 0x04
@@ -68,8 +68,8 @@ def build_session_reply():
     return key + nonce + struct.pack("<q", timestamp_ms)
 
 
-def build_ver_request():
-    return bytes((VER_COMMAND,))
+def build_ver_request(request_id):
+    return struct.pack("<IB", request_id, VER_COMMAND)
 
 
 def build_ver_response(version):
@@ -558,7 +558,8 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
     client_endpoint = (source[0], handshake["reply_port"])
 
     sock.sendto(build_session_reply(), client_endpoint)
-    sock.sendto(build_ver_request(), client_endpoint)
+    ver_request_id = request_id
+    sock.sendto(build_ver_request(ver_request_id), client_endpoint)
 
     deadline = time.monotonic() + timeout
     while True:

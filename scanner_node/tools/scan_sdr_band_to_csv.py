@@ -106,7 +106,7 @@ def connect_scanner(sock, pi_address, pi_user, key_file, windows_address, port,
     parsed = parse_handshake(handshake)
     client_endpoint = (source[0], parsed["reply_port"])
     sock.sendto(build_session_reply(), client_endpoint)
-    sock.sendto(build_ver_request(), client_endpoint)
+    sock.sendto(build_ver_request(1), client_endpoint)
     ver_response, _ = receive_from_pi(sock, pi_address, timeout)
     validate_ver_response(ver_response, "1.0.0.0")
 

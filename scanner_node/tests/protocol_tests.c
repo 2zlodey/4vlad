@@ -23,7 +23,8 @@ int main(int argc, char **argv)
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
-    const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x01 };
+    const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
+    const uint8_t wrong_ver_opcode_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
     const uint8_t frontends_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
     const uint8_t exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0xde };
     const uint8_t obsolete_exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
@@ -48,6 +49,7 @@ int main(int argc, char **argv)
     ScannerGetValueRequest get_gain_stages_request;
     ScannerRadioInventory inventory;
     ScannerRadioInventory close_inventory;
+    uint32_t ver_request_id = 0;
 #ifdef SCANNER_ENABLE_STUB_SDR
     static const uint8_t expected_stub_iq_cycle[8] = { 0x20, 0x20, 0xe0, 0x20, 0xe0, 0xe0, 0x20, 0xe0 };
     ScannerRadioInventory stub_inventory;
@@ -92,11 +94,19 @@ int main(int argc, char **argv)
     ok &= require_true(handshake[0] == 0x04 && handshake[3] == 0x01, "Handshake counter is not little-endian");
     ok &= require_true(handshake[20] == 0x05 && handshake[21] == 0x0d, "Handshake reply port is not little-endian");
     ok &= require_true(handshake[22] == (uint8_t)(device.id & 0xff), "Device ID offset or byte order is incorrect");
-    ok &= require_true(scanner_decode_ver_request(request_bytes, sizeof(request_bytes)),
+    ok &= require_true(scanner_decode_ver_request(request_bytes, sizeof(request_bytes), &ver_request_id),
                        "Valid VER request was rejected");
-    ok &= require_true(!scanner_decode_ver_request(request_bytes, 0), "Short VER request was accepted");
-    ok &= require_true(!scanner_decode_ver_request(frontends_request_bytes, sizeof(frontends_request_bytes)),
-                       "RequestId-wrapped VER was accepted");
+    ok &= require_true(ver_request_id == UINT32_C(0x12345678), "VER RequestId decode failed");
+    ok &= require_true(!scanner_decode_ver_request(request_bytes, 1, &ver_request_id),
+                       "Short VER request was accepted");
+    ok &= require_true(!scanner_decode_ver_request(wrong_ver_opcode_bytes, sizeof(wrong_ver_opcode_bytes),
+                                                   &ver_request_id),
+                       "VER request with the wrong opcode was accepted");
+    ok &= require_true(!scanner_decode_ver_request(frontends_request_bytes, sizeof(frontends_request_bytes),
+                                                   &ver_request_id),
+                       "Frontend query was accepted as a VER request");
+    ok &= require_true(!scanner_decode_ver_request(request_bytes, sizeof(request_bytes), NULL),
+                       "VER request with null RequestId output was accepted");
     ok &= require_true(scanner_encode_ver_response(response, "1.0.0.0") == sizeof(response),
                        "VER response encoding failed");
     ok &= require_true(response[0] == SCANNER_VER_COMMAND && memcmp(response + 1, "1.0.0.0", 7) == 0,

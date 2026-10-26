@@ -10,12 +10,12 @@ All multibyte fields are little-endian. Radio commands use the common headers be
 | --- | --- | ---: |
 | Handshake | Device handshake fields | 626 B |
 | Session reply | `[key:32][nonce:12][timestamp:8]` | 52 B |
-| VER request | `[opcode:0x01]` | 1 B |
+| VER request | `[request_id:u32 LE][opcode:0x01]` | 5 B |
 | VER response | `[opcode:0x01][version:10 ASCII bytes, zero-padded]` | 11 B |
 | Radio request | `[request_id:u32][opcode:u8][arguments]` | varies |
 | Radio response | `[request_id:u32][opcode:u8][status:u8][fields]` | varies |
 
-VER does not carry RequestId/status. Radio command arguments keep the units shown below; capability descriptors are in Hz.
+VER request carries RequestId but no status; its 11-byte response remains `[opcode][10-byte version]`. Radio command arguments keep the units shown below; capability descriptors are in Hz.
 
 ## Commands
 

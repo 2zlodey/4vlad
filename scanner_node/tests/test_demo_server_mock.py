@@ -56,11 +56,11 @@ class DemoServerMockTests(unittest.TestCase):
         with self.assertRaises(MockProtocolError):
             parse_handshake(b"short")
 
-    def test_ver_request_is_opcode_only_and_response_has_ten_version_bytes(self):
-        request = build_ver_request()
+    def test_ver_request_includes_little_endian_request_id(self):
+        request = build_ver_request(0x12345678)
         response = build_ver_response("1.0.0.0")
 
-        self.assertEqual(request, b"\x01")
+        self.assertEqual(request, b"\x78\x56\x34\x12\x01")
         self.assertEqual(response, b"\x01" + b"1.0.0.0\0\0\0")
         validate_ver_response(response, "1.0.0.0")
 
@@ -100,7 +100,7 @@ class DemoServerMockTests(unittest.TestCase):
             session, _ = client.recvfrom(1024)
             request, _ = client.recvfrom(1024)
             self.assertEqual(len(session), 52)
-            self.assertEqual(request, build_ver_request())
+            self.assertEqual(request, build_ver_request(1))
             client.sendto(build_ver_response("1.0.0.0"), server.getsockname())
             exit_request, _ = client.recvfrom(1024)
             self.assertEqual(exit_request, build_exit_request(2))
@@ -142,7 +142,7 @@ class DemoServerMockTests(unittest.TestCase):
             session, _ = client.recvfrom(1024)
             request, _ = client.recvfrom(1024)
             self.assertEqual(len(session), 52)
-            self.assertEqual(request, build_ver_request())
+            self.assertEqual(request, build_ver_request(7))
             client.sendto(build_ver_response("1.0.0.0"), server.getsockname())
 
             query, _ = client.recvfrom(1024)

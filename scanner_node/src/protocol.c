@@ -61,9 +61,14 @@ void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const Scan
     }
 }
 
-int scanner_decode_ver_request(const uint8_t *bytes, size_t size)
+int scanner_decode_ver_request(const uint8_t *bytes, size_t size, uint32_t *request_id)
 {
-    return bytes != NULL && size == SCANNER_VER_REQUEST_SIZE && bytes[0] == SCANNER_VER_COMMAND;
+    if (bytes == NULL || request_id == NULL || size != SCANNER_VER_REQUEST_SIZE
+        || bytes[4] != SCANNER_VER_COMMAND)
+        return 0;
+
+    *request_id = read_u32_le(bytes);
+    return 1;
 }
 
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request)

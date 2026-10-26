@@ -21,8 +21,9 @@ int main(void)
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
     uint8_t session_reply[SCANNER_SESSION_REPLY_SIZE] = { 0 };
-    uint8_t ver_request[SCANNER_VER_REQUEST_SIZE] = { SCANNER_VER_COMMAND };
+    uint8_t ver_request[SCANNER_VER_REQUEST_SIZE] = { 0x34, 0x12, 0x00, 0x00, SCANNER_VER_COMMAND };
     uint8_t ver_response[SCANNER_VER_RESPONSE_SIZE];
+    uint32_t ver_request_id = 0;
     uint16_t server_port;
     uint16_t client_port;
     char error[256];
@@ -72,7 +73,8 @@ int main(void)
                    && packet.size == SCANNER_SESSION_REPLY_SIZE,
                "Client did not receive session response")
         || !check(scanner_udp_receive(&client, 1000, &packet, error, sizeof(error)) == 1
-                      && scanner_decode_ver_request(packet.payload, packet.size),
+                       && scanner_decode_ver_request(packet.payload, packet.size, &ver_request_id)
+                       && ver_request_id == UINT32_C(0x1234),
                   "Client did not decode server VER request"))
     {
         goto cleanup;
