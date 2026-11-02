@@ -83,3 +83,4 @@ scanner_????????_??????_*.html
 /scanner_node/measurements/av1660_shifted_start_bladerf.csv
 /scanner_node/measurements/av1660_targeted_bladerf.csv
 /scanner_node/measurements/threaded_smoke/air_sweep_bladerf2_micro_100-140MHz_sample20MHz_grid20MHz_totalGain60.0dB_20261001T230408.csv
+/scanner_node/build-windows/
