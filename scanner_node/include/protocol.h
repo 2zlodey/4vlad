@@ -10,12 +10,14 @@
 #define SCANNER_HANDSHAKE_SIZE 626u
 #define SCANNER_SESSION_REPLY_SIZE 52u
 #define SCANNER_VER_REQUEST_SIZE 5u
-#define SCANNER_VER_RESPONSE_SIZE 11u
+#define SCANNER_VER_RESPONSE_SIZE 14u
 #define SCANNER_RADIO_REQUEST_HEADER_SIZE 5u
+#define SCANNER_UNSUPPORTED_RESPONSE_SIZE 6u
 
 /* Wire fields below are packed in listed order, without C struct padding.
  * Every request starts with request_id:u32, opcode:u8 (5 bytes).
- * Every radio response starts with request_id:u32, opcode:u8, status:u8 (6 bytes).
+ * Extended radio responses start with request_id:u32, opcode:u8, status:u8 (6 bytes).
+ * Standard 0x02/0x03 responses have NO status; VER echoes request_id plus version.
  * Req/Resp below list fields AFTER those headers. VER has its own response format.
  * All multi-byte integers are little-endian; uN/iN mean unsigned/signed N-bit integers.
  * request_id and opcode are echoed in responses. status uses SCANNER_RADIO_STATUS_*.
@@ -28,7 +30,7 @@
  */
 
 /* Query node version during session setup; VER is not wrapped in status.
- * Req: request_id:u32, opcode:0x01 (5 bytes). Resp: [01][10 ASCII version bytes] (11 bytes total).
+ * Req: request_id:u32, opcode:0x01 (5 bytes). Resp: request_id:u32 + 10 ASCII version bytes (14 bytes total).
  * Short versions are zero-padded; --software-version must be 1..10 ASCII bytes.
  */
 #define SCANNER_VER_COMMAND 0x01u
@@ -165,22 +167,21 @@
  */
 #define SCANNER_MEASURE_CURRENT_COMMAND 0x6du
 
-/* Tune to the requested frequency, then capture/analyze; leaves RX tuned there.
- * Req: channel:u8, frequency_khz:u32. Resp: channel:u8, power_cdbfs:i16.
- * Power uses the same centi-dBFS convention as MEASURE_CURRENT.
- * frequency_khz: 70000..6000000 and within frontend limits, as for SET_FREQUENCY.
- * Requires configured sample rate and bandwidth; captures 1024 IQ pairs.
+/* Standard Orkestr 0x02: request id:u32, opcode:u8, channel:u8, frequency_khz:u32 (10 B).
+ * Response: id:u32, opcode:u8, channel:u8, power_cdbfs:i16 (8 B); NO status.
+ * Wire limits: channel 0..1, frequency 1000..7000000 kHz; actual hardware limits apply.
+ * Lazily selects/configures RX. On hardware error logs and omits the response.
+ * Power is mean IQ power in centi-dBFS, not calibrated dBm.
  */
 #define SCANNER_MEASURE_FREQUENCY_COMMAND 0x02u
 
-/* Capture/analyze a frequency grid from start through stop, with nonzero step.
- * Req: channel:u8, start_khz:u32, stop_khz:u32, step_khz:u32 (18 bytes total).
- * Resp: channel:u8, count:u16, points[count]; point = frequency_khz:u32, power_cdbfs:i16.
- * At most 128 points; stop is included if on the grid. Leaves RX at the last point.
- * start_khz/stop_khz: 70000..6000000 and within frontend limits; start_khz <= stop_khz.
- * step_khz: 1..4294967295; floor((stop_khz-start_khz)/step_khz)+1 must be 1..128.
- * A step greater than the span is allowed and yields one point at start_khz.
- * Requires configured sample rate/bandwidth; captures 4096 IQ pairs per point.
+/* Standard Orkestr range 0x03: request id:u32, opcode:u8, channel:u8,
+ * start_khz:u32, stop_khz:u32 (14 B). Response id:u32, opcode:u8,
+ * channel:u8, strongest_frequency_khz:u32, power_cdbfs:i16 (12 B); NO status.
+ * Inclusive ascending range, same wire limits as 0x02. Internal step is
+ * max(1000, ceil((stop-start)/127)) kHz; includes stop, at most 128 captures.
+ * Returns strongest sampled window; ties choose the first/lower frequency.
+ * Leaves RX tuned to the final point. Hardware errors yield no measurement reply.
  */
 #define SCANNER_SWEEP_COMMAND 0x03u
 
@@ -207,7 +208,7 @@
 #define SCANNER_MAX_SWEEP_POINTS 128u
 #define SCANNER_MAX_RAW_IQ_PAIRS SCANNER_RADIO_MAX_IQ_PAIRS
 #define SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE 10u
-#define SCANNER_SWEEP_RESPONSE_HEADER_SIZE 9u
+#define SCANNER_SWEEP_RESPONSE_HEADER_SIZE 12u
 #define SCANNER_RADIO_COMMAND_RESPONSE_MAX_SIZE (SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE + SCANNER_MAX_RAW_IQ_PAIRS * 4u)
 
 #define SCANNER_RADIO_STATUS_OK 0u
@@ -321,7 +322,10 @@ typedef struct
 void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
                               const ScannerDevice *device);
 int scanner_decode_ver_request(const uint8_t *bytes, size_t size, uint32_t *request_id);
-size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], const char *version);
+int scanner_decode_command_header(const uint8_t *bytes, size_t size, uint32_t *request_id, uint8_t *command);
+size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version);
+size_t scanner_encode_unsupported_response(uint8_t output[SCANNER_UNSUPPORTED_RESPONSE_SIZE], uint32_t request_id,
+                                           uint8_t command);
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request);
 int scanner_decode_set_active_radio_request(const uint8_t *bytes, size_t size, ScannerSetActiveRadioRequest *request);
 int scanner_decode_exit_request(const uint8_t *bytes, size_t size, ScannerExitRequest *request);

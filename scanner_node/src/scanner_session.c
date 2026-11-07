@@ -61,7 +61,9 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const ScannerOption
     while (monotonic_milliseconds() < deadline)
     {
         uint64_t now = monotonic_milliseconds();
-        unsigned int remaining = (unsigned int)(deadline - now);
+        unsigned int remaining;
+        if (now >= deadline) break;
+        remaining = (unsigned int)(deadline - now);
         ScannerDatagram datagram;
         int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
         if (result <= 0)
@@ -70,14 +72,14 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const ScannerOption
             return result;
         }
 
-        if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
+        if (!scanner_same_address(&datagram.source, options->server_address))
         {
             char source[64];
             scanner_endpoint_string(&datagram.source, source, sizeof(source));
             LG('!', "Ignoring datagram from unexpected endpoint %s", source);
             continue;
         }
-        if (datagram.size != expected_size)
+        if (datagram.size < expected_size)
         {
             if (!options->ignore_session_reply_size)
             {
@@ -105,11 +107,12 @@ static int exchange_handshake(ScannerUdpSocket *socket_handle, const ScannerOpti
 
     header.counter = 1;
     wall_clock_parts(&header.seconds, &header.microseconds);
-    header.reply_port = options->local_port;
+    header.reply_port = options->reply_port;
     scanner_encode_handshake(handshake, &header, device);
 
-    LG('i', "Scanner node %" PRId32 " -> %s:%u (local %s:%u)", device->id, options->server_address,
-       (unsigned int)options->server_port, options->bind_address, (unsigned int)options->local_port);
+    LG('i', "Scanner node %" PRId32 " -> %s:%u (local %s:%u, reply port %u)", device->id, options->server_address,
+         (unsigned int)options->server_port, options->bind_address, (unsigned int)options->local_port,
+         (unsigned int)options->reply_port);
 
     for (attempt = 1; attempt <= options->attempts; ++attempt)
     {
@@ -139,58 +142,6 @@ static int exchange_handshake(ScannerUdpSocket *socket_handle, const ScannerOpti
     return 0;
 }
 
-static int exchange_version(ScannerUdpSocket *socket_handle, const ScannerOptions *options, char *error,
-                            size_t error_size)
-{
-    ScannerDatagram datagram;
-    uint32_t request_id;
-    uint64_t deadline = monotonic_milliseconds() + options->ver_timeout_ms;
-    LG('i', "Session reply received; waiting for VER request");
-    while (monotonic_milliseconds() < deadline)
-    {
-        uint64_t now = monotonic_milliseconds();
-        unsigned int remaining = (unsigned int)(deadline - now);
-        uint8_t response[SCANNER_VER_RESPONSE_SIZE];
-        int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
-        if (result < 0)
-        {
-            LG('!', "VER request receive failed");
-            return 0;
-        }
-        if (result == 0)
-            break;
-
-        if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
-        {
-            char source[64];
-            scanner_endpoint_string(&datagram.source, source, sizeof(source));
-            LG('!', "Ignoring VER candidate from %s", source);
-            continue;
-        }
-        if (!scanner_decode_ver_request(datagram.payload, datagram.size, &request_id))
-        {
-            LG('!', "Ignoring malformed or unsupported VER command datagram");
-            continue;
-        }
-        LG('<', "VER request accepted id=%" PRIu32, request_id);
-        if (scanner_encode_ver_response(response, options->software_version) != sizeof(response))
-        {
-            LG('!', "Invalid VER software version");
-            return 0;
-        }
-        if (!scanner_udp_send(socket_handle, options->server_address, options->server_port, response, sizeof(response),
-                              error, error_size))
-        {
-            LG('!', "VER response send failed");
-            return 0;
-        }
-        LG('>', "VER answered with version %s (%u bytes)", options->software_version, (unsigned int)sizeof(response));
-        return 1;
-    }
-    LG('!', "Timed out waiting for a valid VER request");
-    return 0;
-}
-
 int scanner_session_establish(ScannerUdpSocket *socket_handle, const ScannerOptions *options,
                               const ScannerDevice *device, char *error, size_t error_size)
 {
@@ -201,12 +152,11 @@ int scanner_session_establish(ScannerUdpSocket *socket_handle, const ScannerOpti
         LG('!', "Session establishment failed: invalid arguments");
         return 0;
     }
-    if (!exchange_handshake(socket_handle, options, device, error, error_size)
-        || !exchange_version(socket_handle, options, error, error_size))
+    if (!exchange_handshake(socket_handle, options, device, error, error_size))
     {
         LG('!', "Session establishment failed");
         return 0;
     }
-    LG('+', "Session established");
+    LG('+', "Session received; command loop will answer VER; server acceptance has no final acknowledgement");
     return 1;
 }

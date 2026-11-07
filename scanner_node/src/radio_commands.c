@@ -20,6 +20,37 @@ static uint32_t hz_to_khz_rounded(uint64_t frequency_hz)
     return value_khz > UINT32_MAX ? UINT32_MAX : (uint32_t)value_khz;
 }
 
+static int is_known_command(uint8_t command)
+{
+    switch (command)
+    {
+    case SCANNER_VER_COMMAND:
+    case SCANNER_MEASURE_FREQUENCY_COMMAND:
+    case SCANNER_SWEEP_COMMAND:
+    case SCANNER_GET_RADIO_FRONTENDS_COMMAND:
+    case SCANNER_SET_ACTIVE_RADIO_COMMAND:
+    case SCANNER_SET_FREQUENCY_COMMAND:
+    case SCANNER_SET_SAMPLE_RATE_COMMAND:
+    case SCANNER_SET_LNA_GAIN_COMMAND:
+    case SCANNER_SET_VGA_GAIN_COMMAND:
+    case SCANNER_SET_BANDWIDTH_COMMAND:
+    case SCANNER_REINITIALIZE_SDR_COMMAND:
+    case SCANNER_GET_FREQUENCY_COMMAND:
+    case SCANNER_GET_GAIN_COMMAND:
+    case SCANNER_GET_GAIN_STAGES_COMMAND:
+    case SCANNER_GET_SAMPLE_RATE_COMMAND:
+    case SCANNER_MEASURE_CURRENT_COMMAND:
+    case SCANNER_GET_RAW_IQ_COMMAND:
+    case SCANNER_SAVE_IQ_TO_FILE_COMMAND:
+    case SCANNER_EXIT_COMMAND:
+    case SCANNER_SELECT_ANTENNA_COMMAND:
+    case SCANNER_SET_PATH_COMMAND:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int store_worker_response(ScannerRadioWorkerResult *worker_result, const uint8_t *response, size_t response_size)
 {
     if (response_size == 0 || response_size > sizeof(worker_result->payload))
@@ -30,9 +61,7 @@ static int store_worker_response(ScannerRadioWorkerResult *worker_result, const 
     }
     memcpy(worker_result->payload, response, response_size);
     worker_result->size = response_size;
-    LG(response[5] == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-       "Radio command completed command=%u status=%u response-bytes=%lu", (unsigned int)response[4],
-       (unsigned int)response[5], (unsigned long)response_size);
+    LG('+', "Radio command response ready (%lu bytes)", (unsigned long)response_size);
     return 1;
 }
 
@@ -107,6 +136,64 @@ static int analyze_captured_window(ScannerRadioInventory *inventory, uint8_t cha
     return 1;
 }
 
+/* Standard Orkestr has no radio-setup exchange. Lazily open an RX frontend and
+ * establish conservative defaults without overriding explicit user settings. */
+static int prepare_standard_rx(ScannerRadioInventory *inventory, uint8_t channel)
+{
+    const ScannerRadioFrontend *f = scanner_radio_active(inventory);
+    uint32_t actual, target;
+    uint8_t gain;
+    size_t i;
+    if (f == NULL || f->device_handle == NULL)
+    {
+        for (i = 0; i < inventory->count; ++i)
+            if ((inventory->frontends[i].capabilities & SCANNER_RADIO_CAP_RX)
+                && channel < inventory->frontends[i].rx_channels
+                && scanner_radio_select(inventory, inventory->frontends[i].id))
+                break;
+        f = scanner_radio_active(inventory);
+    }
+    if (f == NULL || f->device_handle == NULL || channel >= f->rx_channels)
+        return 0;
+    if (!f->sample_rate_configured)
+    {
+        target = 2000000u;
+        if (target < f->sample_rate_min_hz)
+            target = f->sample_rate_min_hz;
+        if (target > f->sample_rate_max_hz)
+            target = f->sample_rate_max_hz;
+        if (f->sample_rate_step_hz)
+            target = f->sample_rate_min_hz
+                     + (target - f->sample_rate_min_hz) / f->sample_rate_step_hz * f->sample_rate_step_hz;
+        if (!scanner_radio_set_sample_rate(inventory, channel, target, &actual))
+            return 0;
+    }
+    if (!f->bandwidth_configured)
+    {
+        target = 1750000u;
+        if (target < f->bandwidth_min_hz)
+            target = f->bandwidth_min_hz;
+        if (target > f->bandwidth_max_hz)
+            target = f->bandwidth_max_hz;
+        if (f->bandwidth_option_count)
+            target = f->bandwidth_options[0];
+        else if (f->bandwidth_step_hz)
+            target = f->bandwidth_min_hz + (target - f->bandwidth_min_hz) / f->bandwidth_step_hz * f->bandwidth_step_hz;
+        if (!scanner_radio_set_bandwidth(inventory, channel, target, &actual))
+            return 0;
+    }
+    if (f->backend == SCANNER_RADIO_BACKEND_HACKRF || f->backend == SCANNER_RADIO_BACKEND_STUB)
+    {
+        if (!f->lna_gain_configured
+            && !scanner_radio_set_gain_stage(inventory, channel, SCANNER_RADIO_GAIN_LNA, 16, &gain))
+            return 0;
+        if (!f->vga_gain_configured
+            && !scanner_radio_set_gain_stage(inventory, channel, SCANNER_RADIO_GAIN_VGA, 16, &gain))
+            return 0;
+    }
+    return 1;
+}
+
 int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
                                  const ScannerDatagram *datagram, ScannerRadioWorkerResult *worker_result,
                                  void *context)
@@ -130,6 +217,13 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
     ScannerRadioCommandContext *app = (ScannerRadioCommandContext *)context;
     PERF_SCOPE("radio.command");
 
+    uint32_t ver_id;
+    if (scanner_decode_ver_request(datagram->payload, datagram->size, &ver_id))
+    {
+        response_size = scanner_encode_ver_response(response, ver_id,
+                                                    app && app->software_version ? app->software_version : "1.1.0.0");
+        return store_worker_response(worker_result, response, response_size);
+    }
     if (scanner_decode_reinitialize_request(datagram->payload, datagram->size, &reinitialize_request))
     {
         uint8_t status = SCANNER_RADIO_STATUS_OK;
@@ -488,6 +582,11 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         uint8_t status = SCANNER_RADIO_STATUS_OK;
         uint64_t actual_hz = 0;
         int16_t noise_floor_cdbfs = 0;
+        if (!prepare_standard_rx(inventory, measure_frequency_request.channel))
+        {
+            LG('!', "Standard RX preparation failed");
+            return 1;
+        }
         ScannerAnalysisResult analysis_result;
         active_frontend = scanner_radio_active(inventory);
         if (active_frontend == NULL || active_frontend->device_handle == NULL)
@@ -509,17 +608,24 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
            "Measure frequency id=%" PRIu32 " channel=%u requested=%u kHz status=%u power=%d cdbfs",
            measure_frequency_request.request_id, (unsigned int)measure_frequency_request.channel,
            (unsigned int)measure_frequency_request.frequency_khz, (unsigned int)status, (int)noise_floor_cdbfs);
+        if (status != SCANNER_RADIO_STATUS_OK)
+            return 1;
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
     }
 
-    /* SWEEP returns one DSP-estimated noise-floor level per tuned frequency. */
+    /* Standard range reply returns only the strongest sampled window. */
     if (scanner_decode_sweep_request(datagram->payload, datagram->size, &sweep_request))
     {
         LG('i', "Sweep id=%" PRIu32 " channel=%u start=%u stop=%u step=%u kHz", sweep_request.request_id,
            (unsigned int)sweep_request.channel, (unsigned int)sweep_request.start_khz,
            (unsigned int)sweep_request.stop_khz, (unsigned int)sweep_request.step_khz);
+        if (!prepare_standard_rx(inventory, sweep_request.channel))
+        {
+            LG('!', "Standard RX preparation failed");
+            return 1;
+        }
         uint32_t frequencies[SCANNER_MAX_SWEEP_POINTS];
         int16_t noise_floors_cdbfs[SCANNER_MAX_SWEEP_POINTS];
         uint16_t count = 0;
@@ -537,7 +643,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                  || (uint64_t)sweep_request.stop_khz * 1000u > active_frontend->frequency_max_hz)
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
         point_count = status == SCANNER_RADIO_STATUS_OK
-                          ? ((uint64_t)sweep_request.stop_khz - sweep_request.start_khz) / sweep_request.step_khz + 1u
+                          ? ((uint64_t)sweep_request.stop_khz - sweep_request.start_khz + sweep_request.step_khz - 1u)
+                                    / sweep_request.step_khz
+                                + 1u
                           : 0u;
         if (status == SCANNER_RADIO_STATUS_OK && point_count > SCANNER_MAX_SWEEP_POINTS)
             status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
@@ -546,7 +654,9 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         if (status == SCANNER_RADIO_STATUS_OK)
         {
             for (current_khz = sweep_request.start_khz; current_khz <= sweep_request.stop_khz;
-                 current_khz += sweep_request.step_khz)
+                 current_khz = current_khz + sweep_request.step_khz < sweep_request.stop_khz
+                                   ? current_khz + sweep_request.step_khz
+                                   : sweep_request.stop_khz)
             {
                 uint64_t actual_hz = 0;
                 uint32_t rounded_khz;
@@ -569,7 +679,7 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                 rounded_khz = (uint32_t)(actual_hz / 1000u);
                 frequencies[count] = rounded_khz;
                 count++;
-                if (sweep_request.stop_khz - current_khz < sweep_request.step_khz)
+                if (current_khz == sweep_request.stop_khz)
                     break;
             }
         }
@@ -577,6 +687,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                                                       sweep_request.channel, count, frequencies, noise_floors_cdbfs);
         LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!', "Sweep id=%" PRIu32 " status=%u points=%u",
            sweep_request.request_id, (unsigned int)status, (unsigned int)count);
+        if (status != SCANNER_RADIO_STATUS_OK)
+            return 1;
         if (!store_worker_response(worker_result, response, response_size))
             return 0;
         return 1;
@@ -658,6 +770,20 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         return 2;
     }
 
-    LG('!', "Ignoring malformed or unsupported radio command");
+    {
+        uint32_t request_id;
+        uint8_t command;
+        if (scanner_decode_command_header(datagram->payload, datagram->size, &request_id, &command)
+            && !is_known_command(command))
+        {
+            response_size = scanner_encode_unsupported_response(response, request_id, command);
+            if (!store_worker_response(worker_result, response, response_size))
+                return 0;
+            LG('i', "Unsupported command 0x%02x answered NOT_SUPPORTED", (unsigned int)command);
+            return 1;
+        }
+    }
+
+    LG('!', "Ignoring malformed radio command");
     return 1;
 }

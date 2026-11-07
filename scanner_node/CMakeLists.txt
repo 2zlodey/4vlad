@@ -189,4 +189,26 @@ if(BUILD_TESTING)
     endif()
     scanner_enable_warnings(scanner_radio_worker_tests)
     add_test(NAME scanner_radio_worker_tests COMMAND scanner_radio_worker_tests)
+
+    add_executable(scanner_radio_command_tests
+        tests/radio_command_tests.c
+        src/radio_commands.c
+        src/radio_worker.c
+        src/commutator.c
+        src/iq_recording.c
+    )
+    target_include_directories(scanner_radio_command_tests PRIVATE include)
+    target_link_libraries(scanner_radio_command_tests PRIVATE scanner_protocol scanner_radio scanner_analysis
+                                                               scanner_perf scanner_log Threads::Threads)
+    if(WIN32)
+        target_link_libraries(scanner_radio_command_tests PRIVATE ws2_32)
+    endif()
+    scanner_enable_warnings(scanner_radio_command_tests)
+    add_test(NAME scanner_radio_command_tests COMMAND scanner_radio_command_tests)
+
+    add_executable(scanner_options_tests tests/scanner_options_tests.c src/scanner_options.c)
+    target_include_directories(scanner_options_tests PRIVATE include)
+    target_link_libraries(scanner_options_tests PRIVATE scanner_log)
+    scanner_enable_warnings(scanner_options_tests)
+    add_test(NAME scanner_options_tests COMMAND scanner_options_tests)
 endif()

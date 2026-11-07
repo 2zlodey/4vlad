@@ -58,11 +58,11 @@ class DemoServerMockTests(unittest.TestCase):
 
     def test_ver_request_includes_little_endian_request_id(self):
         request = build_ver_request(0x12345678)
-        response = build_ver_response("1.0.0.0")
+        response = build_ver_response("1.0.0.0", 0x12345678)
 
         self.assertEqual(request, b"\x78\x56\x34\x12\x01")
-        self.assertEqual(response, b"\x01" + b"1.0.0.0\0\0\0")
-        validate_ver_response(response, "1.0.0.0")
+        self.assertEqual(response, b"\x78\x56\x34\x12" + b"1.0.0.0\0\0\0")
+        validate_ver_response(response, "1.0.0.0", 0x12345678)
 
     def test_rejects_wrong_ver_opcode_or_version(self):
         response = build_ver_response("1.0.0.0")
@@ -143,7 +143,7 @@ class DemoServerMockTests(unittest.TestCase):
             request, _ = client.recvfrom(1024)
             self.assertEqual(len(session), 52)
             self.assertEqual(request, build_ver_request(7))
-            client.sendto(build_ver_response("1.0.0.0"), server.getsockname())
+            client.sendto(build_ver_response("1.0.0.0", 7), server.getsockname())
 
             query, _ = client.recvfrom(1024)
             self.assertEqual(query, build_radio_frontends_request(8))

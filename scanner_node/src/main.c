@@ -33,7 +33,7 @@ static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Scanne
                 return 0;
             }
             if (worker_result.size > 0
-                && !scanner_udp_send(socket_handle, options->server_address, options->server_port,
+                && !scanner_udp_reply(socket_handle, &worker_result.destination,
                                      worker_result.payload, worker_result.size, error, error_size))
                 return 0;
             if (worker_result.close_after_send)
@@ -45,7 +45,7 @@ static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Scanne
             return 0;
         if (result == 0)
             continue;
-        if (!scanner_same_endpoint(&datagram.source, options->server_address, options->server_port))
+        if (!scanner_same_address(&datagram.source, options->server_address))
         {
             char source[64];
             scanner_endpoint_string(&datagram.source, source, sizeof(source));
@@ -150,6 +150,7 @@ static int run_node(const ScannerOptions *options)
         result = 0;
         goto cleanup;
     }
+    app_context.software_version = options->software_version;
     app_context.analysis_worker = analysis_worker;
     LG('+', "Analysis worker started");
     app_context.iq_file = iq_file;

@@ -8,6 +8,7 @@
 
 typedef struct
 {
+    const char *software_version;
     ScannerAnalysisWorker *analysis_worker;
     FILE *iq_file;
 } ScannerRadioCommandContext;

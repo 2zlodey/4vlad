@@ -88,7 +88,7 @@ def main():
 
     def serve():
         try:
-            result.append(serve_one(server, "1.0.0.0", min(args.timeout, 10.0), 1, True,
+            result.append(serve_one(server, "1.1.0.0", min(args.timeout, 10.0), 1, True,
                                     args.frontend_id, True))
         except Exception as error:
             errors.append(error)
@@ -193,7 +193,7 @@ def main():
     expected_raw_iq_bytes = 64 * (2 if selected["iq_sample_format"] == 1 else 4)
     if (not command_checks or command_checks.get("raw_iq_bytes") != expected_raw_iq_bytes
             or command_checks.get("saved_iq_bytes") != expected_raw_iq_bytes
-            or command_checks.get("sweep_points") != 2
+            or command_checks.get("sweep_points") != 1
             or not command_checks.get("sdr_reinitialized")
             or "gain_stage_readback_supported" not in command_checks):
         raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")

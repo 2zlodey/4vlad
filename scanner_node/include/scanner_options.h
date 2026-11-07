@@ -13,6 +13,7 @@ typedef struct
     const char *software_version;
     uint16_t server_port;
     uint16_t local_port;
+    uint16_t reply_port;
     unsigned int attempts;
     unsigned int handshake_timeout_ms;
     unsigned int ver_timeout_ms;

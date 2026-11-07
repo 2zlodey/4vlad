@@ -12,7 +12,7 @@ import time
 HANDSHAKE_SIZE = 626
 SESSION_REPLY_SIZE = 52
 VER_REQUEST_SIZE = 5
-VER_RESPONSE_SIZE = 11
+VER_RESPONSE_SIZE = 14
 VER_COMMAND = 0x01
 RADIO_FRONTENDS_COMMAND = 0x04
 SET_ACTIVE_RADIO_COMMAND = 0x05
@@ -72,30 +72,30 @@ def build_ver_request(request_id):
     return struct.pack("<IB", request_id, VER_COMMAND)
 
 
-def build_ver_response(version):
+def build_ver_response(version, request_id=1):
     try:
         version_bytes = version.encode("ascii")
     except UnicodeEncodeError as error:
         raise MockProtocolError("software version must be ASCII") from error
     if not version_bytes or len(version_bytes) > 10:
         raise MockProtocolError("software version must contain 1 to 10 ASCII bytes")
-    return bytes((VER_COMMAND,)) + version_bytes.ljust(10, b"\0")
+    return struct.pack("<I", request_id) + version_bytes.ljust(10, b"\0")
 
 
-def validate_ver_response(payload, expected_version):
+def validate_ver_response(payload, expected_version, request_id=1):
     if len(payload) != VER_RESPONSE_SIZE:
         raise MockProtocolError(
             "VER response has {} bytes, expected {}".format(
                 len(payload), VER_RESPONSE_SIZE
             )
         )
-    if payload[0] != VER_COMMAND:
-        raise MockProtocolError("VER response opcode mismatch")
-    expected_version_bytes = build_ver_response(expected_version)[1:]
-    if payload[1:] != expected_version_bytes:
+    if struct.unpack_from("<I", payload)[0] != request_id:
+        raise MockProtocolError("VER response request id mismatch")
+    expected_version_bytes = build_ver_response(expected_version, request_id)[4:]
+    if payload[4:] != expected_version_bytes:
         raise MockProtocolError(
             "VER version mismatch: got {!r}, expected {!r}".format(
-                payload[1:], expected_version_bytes
+                payload[4:], expected_version_bytes
             )
         )
 
@@ -209,8 +209,8 @@ def build_measure_frequency_request(request_id, channel, frequency_khz):
     return struct.pack("<IBBI", request_id, MEASURE_FREQUENCY_COMMAND, channel, frequency_khz)
 
 
-def build_sweep_request(request_id, channel, start_khz, stop_khz, step_khz):
-    return struct.pack("<IBBIII", request_id, SWEEP_COMMAND, channel, start_khz, stop_khz, step_khz)
+def build_sweep_request(request_id, channel, start_khz, stop_khz):
+    return struct.pack("<IBBII", request_id, SWEEP_COMMAND, channel, start_khz, stop_khz)
 
 
 def build_raw_iq_request(request_id, channel, complex_pairs):
@@ -275,6 +275,13 @@ def validate_iq_file_response(payload, expected_id, channel, sample_format, comp
 
 
 def validate_signed_value_response(payload, expected_id, command, channel):
+    if command == MEASURE_FREQUENCY_COMMAND:
+        if len(payload) != 8:
+            raise MockProtocolError("measure response must have 8 bytes")
+        actual_id, actual_command, actual_channel, value = struct.unpack("<IBBh", payload)
+        if (actual_id, actual_command, actual_channel) != (expected_id, command, channel):
+            raise MockProtocolError("measure response header mismatch")
+        return value
     if len(payload) != 9:
         raise MockProtocolError("signed-value response has {} bytes, expected 9".format(len(payload)))
     actual_id, actual_command, status, actual_channel, value = struct.unpack("<IBBBh", payload)
@@ -298,25 +305,14 @@ def validate_raw_iq_response(payload, expected_id, channel, expected_pairs, expe
 
 
 def validate_sweep_response(payload, expected_id, channel, expected_frequencies, tolerance_khz=0):
-    if len(payload) < 9:
-        raise MockProtocolError("sweep response is shorter than 9 bytes")
-    actual_id, command, status, actual_channel, count = struct.unpack_from("<IBBBH", payload)
-    if (actual_id, command, status, actual_channel, count) != (
-        expected_id, SWEEP_COMMAND, RADIO_STATUS_OK, channel, len(expected_frequencies)
-    ):
-        raise MockProtocolError("sweep response header mismatch")
-    if len(payload) != 9 + count * 6:
-        raise MockProtocolError("sweep response size does not match point count")
-    points = [struct.unpack_from("<Ih", payload, 9 + index * 6) for index in range(count)]
-    actual_frequencies = [point[0] for point in points]
-    if any(abs(actual - expected) > tolerance_khz
-           for actual, expected in zip(actual_frequencies, expected_frequencies)):
-        raise MockProtocolError(
-            "sweep frequencies mismatch: got {}, expected {} within {} kHz".format(
-                actual_frequencies, expected_frequencies, tolerance_khz
-            )
-        )
-    return [point[1] for point in points]
+    if len(payload) != 12:
+        raise MockProtocolError("range response must have 12 bytes")
+    actual_id, command, actual_channel, frequency, power = struct.unpack("<IBBIh", payload)
+    if (actual_id, command, actual_channel) != (expected_id, SWEEP_COMMAND, channel):
+        raise MockProtocolError("range response header mismatch")
+    if not min(expected_frequencies) - tolerance_khz <= frequency <= max(expected_frequencies) + tolerance_khz:
+        raise MockProtocolError("range result is outside requested interval")
+    return [power]
 
 
 def exchange_radio_request(sock, endpoint, request):
@@ -459,7 +455,7 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
     sweep_id = next_request_id(frequency_measure_id)
     response = exchange_radio_request(
         sock, endpoint, build_sweep_request(sweep_id, 0, frequency_khz,
-                                            frequency_khz + 100, 100)
+                                            frequency_khz + 100)
     )
     sweep_powers = validate_sweep_response(
         response, sweep_id, 0, [frequency_khz, frequency_khz + 100], tolerance_khz=1
@@ -574,7 +570,7 @@ def serve_one(sock, version, timeout, request_id, radio_commands=False, frontend
                 file=sys.stderr,
             )
             continue
-        validate_ver_response(response, version)
+        validate_ver_response(response, version, request_id)
         radio_result = None
         exit_after_id = request_id
         if radio_commands:
@@ -687,7 +683,7 @@ def parse_args(argv=None):
     )
     parser.add_argument("--port", type=int, default=2653, help="UDP port (default: 2653)")
     parser.add_argument(
-        "--version", default="1.0.0.0", help="10-byte-or-shorter ASCII VER value"
+        "--version", default="1.1.0.0", help="10-byte-or-shorter ASCII VER value"
     )
     parser.add_argument(
         "--timeout", type=float, default=10.0, help="per phase timeout in seconds (default: 10)"

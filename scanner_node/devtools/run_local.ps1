@@ -9,6 +9,8 @@ param(
     [int]$ServerPort = 2653,
     [ValidateRange(1, 65535)]
     [int]$LocalPort = 3333,
+    [ValidateRange(0, 65535)]
+    [int]$ReplyPort = 0,
     [switch]$BuildOnly
 )
 
@@ -80,7 +82,11 @@ $nodeArgs = @(
     '--local-port', "$LocalPort",
     '--device-json', $deviceJson
 )
-Write-Host "Starting scanner node for ${ServerAddress}:$ServerPort. Press Ctrl+C to stop it."
+if ($ReplyPort -gt 0) {
+    $nodeArgs += @('--reply-port', "$ReplyPort")
+}
+$effectiveReplyPort = if ($ReplyPort -gt 0) { $ReplyPort } else { $LocalPort }
+Write-Host "Starting scanner node for ${ServerAddress}:$ServerPort (local port $LocalPort, reply port $effectiveReplyPort). Press Ctrl+C to stop it."
 & $scannerExe @nodeArgs
 if ($LASTEXITCODE -ne 0) {
     throw "scanner_node.exe failed with exit code $LASTEXITCODE"

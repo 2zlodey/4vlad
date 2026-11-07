@@ -87,6 +87,7 @@ static void worker_run(ScannerRadioWorker *worker)
 
         memset(&result, 0, sizeof(result));
         action = worker->handler(worker, worker->inventory, &request, &result, worker->context);
+        result.destination = request.source;
         if (action == 0)
         {
             result.fatal = 1;

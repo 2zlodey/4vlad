@@ -80,7 +80,7 @@ int main(void)
         goto cleanup;
     }
 
-    if (scanner_encode_ver_response(ver_response, "1.0.0.0") != sizeof(ver_response)
+    if (scanner_encode_ver_response(ver_response, ver_request_id, "1.0.0.0") != sizeof(ver_response)
         || !scanner_udp_send(&client, "127.0.0.1", server_port, ver_response, sizeof(ver_response), error,
                              sizeof(error)))
     {
@@ -90,8 +90,8 @@ int main(void)
     if (!check(scanner_udp_receive(&server, 1000, &packet, error, sizeof(error)) == 1,
                "Server did not receive VER response")
         || !check(packet.size == SCANNER_VER_RESPONSE_SIZE, "VER response size mismatch")
-        || !check(packet.payload[0] == SCANNER_VER_COMMAND, "VER opcode mismatch")
-        || !check(memcmp(packet.payload + 1, "1.0.0.0", 7) == 0, "VER version mismatch"))
+        || !check(packet.payload[0] == 0x34 && packet.payload[1] == 0x12, "VER id mismatch")
+        || !check(memcmp(packet.payload + 4, "1.0.0.0", 7) == 0, "VER version mismatch"))
     {
         goto cleanup;
     }

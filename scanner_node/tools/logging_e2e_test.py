@@ -61,7 +61,7 @@ def main():
                         and "[radio_commands.c]" in text and "[iq_recording.c]" in text
                         and "[commutator.c]" in text,
                         "Primary module events missing")
-                require("opcode=0x02 status=0" in text and "hex=" in text, "UDP response metadata missing")
+                require("opcode=0x02 status=none" in text and "hex=" in text, "UDP response metadata missing")
                 packets = [line for line in text.splitlines() if "opcode=0x70 status=0" in line]
                 require(packets and all("[payload omitted]" in line for line in packets), "IQ omission missing")
                 for line in packets:

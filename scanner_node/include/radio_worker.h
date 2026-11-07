@@ -15,6 +15,7 @@ typedef struct
 {
     size_t size;
     uint8_t payload[SCANNER_RADIO_COMMAND_RESPONSE_MAX_SIZE];
+    struct sockaddr_in destination;
     int close_after_send;
     int fatal;
     char error[256];

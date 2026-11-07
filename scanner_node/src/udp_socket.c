@@ -303,3 +303,16 @@ void scanner_endpoint_string(const struct sockaddr_in *endpoint, char *output, s
     }
     snprintf(output, output_size, "%s:%u", address, (unsigned int)ntohs(endpoint->sin_port));
 }
+int scanner_same_address(const struct sockaddr_in *endpoint, const char *address)
+{
+    struct sockaddr_in expected;
+    return endpoint != NULL && make_endpoint(address, 1, &expected, NULL, 0)
+        && endpoint->sin_family == AF_INET && endpoint->sin_addr.s_addr == expected.sin_addr.s_addr;
+}
+int scanner_udp_reply(ScannerUdpSocket *socket_handle, const struct sockaddr_in *endpoint, const uint8_t *data,
+                      size_t size, char *error, size_t error_size)
+{
+    char address[INET_ADDRSTRLEN];
+    if (endpoint == NULL || inet_ntop(AF_INET, &endpoint->sin_addr, address, sizeof(address)) == NULL) return 0;
+    return scanner_udp_send(socket_handle, address, ntohs(endpoint->sin_port), data, size, error, error_size);
+}

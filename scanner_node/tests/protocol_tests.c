@@ -23,8 +23,10 @@ int main(int argc, char **argv)
     ScannerHandshakeHeader header;
     uint8_t handshake[SCANNER_HANDSHAKE_SIZE];
     uint8_t response[SCANNER_VER_RESPONSE_SIZE];
+    uint8_t unsupported_response[SCANNER_UNSUPPORTED_RESPONSE_SIZE];
     const uint8_t request_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x01 };
     const uint8_t wrong_ver_opcode_bytes[SCANNER_VER_REQUEST_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
+    const uint8_t unknown_command_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x21, 0x43, 0x65, 0x87, 0x7f };
     const uint8_t frontends_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x78, 0x56, 0x34, 0x12, 0x04 };
     const uint8_t exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0xde };
     const uint8_t obsolete_exit_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE] = { 0x0b, 0x00, 0x00, 0x00, 0x06 };
@@ -50,6 +52,8 @@ int main(int argc, char **argv)
     ScannerRadioInventory inventory;
     ScannerRadioInventory close_inventory;
     uint32_t ver_request_id = 0;
+    uint32_t command_request_id = 0;
+    uint8_t command_opcode = 0;
 #ifdef SCANNER_ENABLE_STUB_SDR
     static const uint8_t expected_stub_iq_cycle[8] = { 0x20, 0x20, 0xe0, 0x20, 0xe0, 0xe0, 0x20, 0xe0 };
     ScannerRadioInventory stub_inventory;
@@ -107,15 +111,28 @@ int main(int argc, char **argv)
                        "Frontend query was accepted as a VER request");
     ok &= require_true(!scanner_decode_ver_request(request_bytes, sizeof(request_bytes), NULL),
                        "VER request with null RequestId output was accepted");
-    ok &= require_true(scanner_encode_ver_response(response, "1.0.0.0") == sizeof(response),
+    ok &= require_true(scanner_encode_ver_response(response, UINT32_C(0x12345678), "1.0.0.0") == sizeof(response),
                        "VER response encoding failed");
-    ok &= require_true(response[0] == SCANNER_VER_COMMAND && memcmp(response + 1, "1.0.0.0", 7) == 0,
+    ok &= require_true(response[0] == 0x78 && response[3] == 0x12 && memcmp(response + 4, "1.0.0.0", 7) == 0,
                        "VER opcode/version bytes are incorrect");
-    for (index = 8; index < sizeof(response); ++index)
+    for (index = 11; index < sizeof(response); ++index)
     {
         ok &= require_true(response[index] == 0, "VER version is not zero-padded");
     }
-    ok &= require_true(!scanner_encode_ver_response(response, "12345678901"), "Overlong VER version was accepted");
+    ok &= require_true(!scanner_encode_ver_response(response, UINT32_C(0x12345678), "12345678901"),
+                       "Overlong VER version was accepted");
+    ok &= require_true(scanner_decode_command_header(unknown_command_bytes, sizeof(unknown_command_bytes),
+                                                     &command_request_id, &command_opcode)
+                           && command_request_id == UINT32_C(0x87654321) && command_opcode == 0x7f,
+                       "Common command header decode failed");
+    ok &= require_true(!scanner_decode_command_header(unknown_command_bytes, sizeof(unknown_command_bytes) - 1,
+                                                      &command_request_id, &command_opcode),
+                       "Short command header was accepted");
+    ok &= require_true(scanner_encode_unsupported_response(unsupported_response, command_request_id, command_opcode)
+                               == sizeof(unsupported_response)
+                           && memcmp(unsupported_response, "\x21\x43\x65\x87\x7f\x08", sizeof(unsupported_response))
+                                  == 0,
+                       "NOT_SUPPORTED response frame does not match the wire format");
 
     memset(&inventory, 0, sizeof(inventory));
     inventory.active_id = SCANNER_RADIO_ID_NONE;

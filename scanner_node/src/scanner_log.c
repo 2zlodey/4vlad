@@ -208,7 +208,12 @@ void scanner_log_packet(char marker, const char *module, const char *endpoint, c
     for (index = 0; index < shown; ++index)
         snprintf(hex + index * 3, sizeof(hex) - index * 3, "%02x ", payload[index]);
     hex[shown * 3] = '\0';
-    if (command_frame && size >= 5)
+    if (command_frame && marker == '>' && size == 14 && payload[4] >= '0' && payload[4] <= '9')
+        scanner_log_write(marker, module, "UDP %s bytes=14 id=%lu VER response hex=%s", endpoint, request_id, hex);
+    else if (command_frame && marker == '>' && ((opcode == 2 && size == 8) || (opcode == 3 && size == 12)))
+        scanner_log_write(marker, module, "UDP %s bytes=%lu id=%lu opcode=0x%02x status=none hex=%s",
+                          endpoint, (unsigned long)size, request_id, opcode, hex);
+    else if (command_frame && size >= 5)
         scanner_log_write(marker, module, "UDP %s bytes=%lu id=%lu opcode=0x%02x status=%d hex=%s%s", endpoint,
                           (unsigned long)size, request_id, opcode, marker == '>' && size >= 6 ? (int)payload[5] : -1,
                           hex, shown < size ? "[payload omitted]" : "");

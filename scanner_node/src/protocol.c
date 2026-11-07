@@ -63,12 +63,33 @@ void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const Scan
 
 int scanner_decode_ver_request(const uint8_t *bytes, size_t size, uint32_t *request_id)
 {
-    if (bytes == NULL || request_id == NULL || size != SCANNER_VER_REQUEST_SIZE
-        || bytes[4] != SCANNER_VER_COMMAND)
+    if (bytes == NULL || request_id == NULL || size != SCANNER_VER_REQUEST_SIZE || bytes[4] != SCANNER_VER_COMMAND)
         return 0;
 
     *request_id = read_u32_le(bytes);
     return 1;
+}
+
+int scanner_decode_command_header(const uint8_t *bytes, size_t size, uint32_t *request_id, uint8_t *command)
+{
+    if (bytes == NULL || request_id == NULL || command == NULL || size < SCANNER_RADIO_REQUEST_HEADER_SIZE)
+        return 0;
+
+    *request_id = read_u32_le(bytes);
+    *command = bytes[4];
+    return 1;
+}
+
+size_t scanner_encode_unsupported_response(uint8_t output[SCANNER_UNSUPPORTED_RESPONSE_SIZE], uint32_t request_id,
+                                           uint8_t command)
+{
+    if (output == NULL)
+        return 0;
+
+    write_le(output, request_id, 4);
+    output[4] = command;
+    output[5] = SCANNER_RADIO_STATUS_UNSUPPORTED;
+    return SCANNER_UNSUPPORTED_RESPONSE_SIZE;
 }
 
 int scanner_decode_radio_frontends_request(const uint8_t *bytes, size_t size, ScannerRadioFrontendsRequest *request)
@@ -281,6 +302,14 @@ size_t scanner_encode_power_response(uint8_t output[9], uint32_t request_id, uin
         return 0;
     write_le(output, request_id, 4);
     output[4] = command;
+    if (command == SCANNER_MEASURE_FREQUENCY_COMMAND)
+    {
+        if (status != SCANNER_RADIO_STATUS_OK)
+            return 0;
+        output[5] = channel;
+        write_le(output + 6, (uint16_t)noise_floor_cdbfs, 2);
+        return 8;
+    }
     output[5] = status;
     output[6] = channel;
     write_le(output + 7, (uint16_t)noise_floor_cdbfs, 2);
@@ -328,26 +357,22 @@ size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t 
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
                                      const int16_t *noise_floor_cdbfs)
 {
-    size_t required_size = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + (size_t)count * 6u;
-    size_t index;
-    if (output == NULL || count > SCANNER_MAX_SWEEP_POINTS || capacity < required_size
-        || (count > 0 && (frequency_khz == NULL || noise_floor_cdbfs == NULL)))
+    uint16_t index, best = 0;
+    if (output == NULL || capacity < 12 || status != SCANNER_RADIO_STATUS_OK || count == 0
+        || count > SCANNER_MAX_SWEEP_POINTS || frequency_khz == NULL || noise_floor_cdbfs == NULL)
         return 0;
+    for (index = 1; index < count; ++index)
+        if (noise_floor_cdbfs[index] > noise_floor_cdbfs[best])
+            best = index;
     write_le(output, request_id, 4);
     output[4] = SCANNER_SWEEP_COMMAND;
-    output[5] = status;
-    output[6] = channel;
-    write_le(output + 7, count, 2);
-    for (index = 0; index < count; ++index)
-    {
-        size_t offset = SCANNER_SWEEP_RESPONSE_HEADER_SIZE + index * 6u;
-        write_le(output + offset, frequency_khz[index], 4);
-        write_le(output + offset + 4, (uint16_t)noise_floor_cdbfs[index], 2);
-    }
-    return required_size;
+    output[5] = channel;
+    write_le(output + 6, frequency_khz[best], 4);
+    write_le(output + 10, (uint16_t)noise_floor_cdbfs[best], 2);
+    return 12;
 }
 
-size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], const char *version)
+size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], uint32_t request_id, const char *version)
 {
     size_t length;
     size_t index;
@@ -365,9 +390,9 @@ size_t scanner_encode_ver_response(uint8_t output[SCANNER_VER_RESPONSE_SIZE], co
             return 0;
     }
 
-    output[0] = SCANNER_VER_COMMAND;
-    memset(output + 1, 0, 10);
-    memcpy(output + 1, version, length);
+    write_le(output, request_id, 4);
+    memset(output + 4, 0, 10);
+    memcpy(output + 4, version, length);
     return SCANNER_VER_RESPONSE_SIZE;
 }
 
@@ -505,18 +530,24 @@ int scanner_decode_measure_frequency_request(const uint8_t *bytes, size_t size, 
     request->request_id = read_u32_le(bytes);
     request->channel = bytes[5];
     request->frequency_khz = read_u32_le(bytes + 6);
-    return 1;
+    return request->channel <= 1 && request->frequency_khz >= 1000u && request->frequency_khz <= 7000000u;
 }
 
 int scanner_decode_sweep_request(const uint8_t *bytes, size_t size, ScannerSweepRequest *request)
 {
-    if (bytes == NULL || request == NULL || size != 18u || bytes[4] != SCANNER_SWEEP_COMMAND)
+    if (bytes == NULL || request == NULL || size != 14u || bytes[4] != SCANNER_SWEEP_COMMAND)
         return 0;
     request->request_id = read_u32_le(bytes);
     request->channel = bytes[5];
     request->start_khz = read_u32_le(bytes + 6);
     request->stop_khz = read_u32_le(bytes + 10);
-    request->step_khz = read_u32_le(bytes + 14);
+    if (request->channel > 1 || request->start_khz < 1000u || request->stop_khz > 7000000u
+        || request->start_khz > request->stop_khz)
+        return 0;
+    /* Internal policy: 1 MHz grid, at most 128 points, both endpoints included. */
+    request->step_khz = (uint32_t)(((uint64_t)request->stop_khz - request->start_khz + 126u) / 127u);
+    if (request->step_khz < 1000u)
+        request->step_khz = 1000u;
     return 1;
 }
 
