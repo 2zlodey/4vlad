@@ -62,7 +62,8 @@ static int receive_expected(ScannerUdpSocket *socket_handle, const ScannerOption
     {
         uint64_t now = monotonic_milliseconds();
         unsigned int remaining;
-        if (now >= deadline) break;
+        if (now >= deadline)
+            break;
         remaining = (unsigned int)(deadline - now);
         ScannerDatagram datagram;
         int result = scanner_udp_receive(socket_handle, remaining, &datagram, error, error_size);
@@ -111,8 +112,8 @@ static int exchange_handshake(ScannerUdpSocket *socket_handle, const ScannerOpti
     scanner_encode_handshake(handshake, &header, device);
 
     LG('i', "Scanner node %" PRId32 " -> %s:%u (local %s:%u, reply port %u)", device->id, options->server_address,
-         (unsigned int)options->server_port, options->bind_address, (unsigned int)options->local_port,
-         (unsigned int)options->reply_port);
+       (unsigned int)options->server_port, options->bind_address, (unsigned int)options->local_port,
+       (unsigned int)options->reply_port);
 
     for (attempt = 1; attempt <= options->attempts; ++attempt)
     {

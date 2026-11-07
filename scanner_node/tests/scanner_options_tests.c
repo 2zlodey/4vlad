@@ -22,8 +22,8 @@ int main(void)
     int ok = 1;
 
     ok &= require_true(scanner_options_parse(1, defaults, &options) && options.local_port == 3333
-                           && options.reply_port == 3333,
-                       "Default reply port did not match the local port");
+                           && options.reply_port == 3333 && strcmp(options.device_json, "../device.json") == 0,
+                       "Default reply port or device JSON path is incorrect");
     ok &= require_true(scanner_options_parse(3, custom_local, &options) && options.local_port == 4100
                            && options.reply_port == 4100,
                        "Changing the local port did not update the default reply port");

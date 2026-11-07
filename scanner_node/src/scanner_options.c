@@ -15,7 +15,7 @@ void scanner_options_print_usage(const char *program)
         "  --bind-address IPv4   Local bind address (default 0.0.0.0)\n"
         "  --local-port N        Local UDP bind port (default 3333)\n"
         "  --reply-port N        Port advertised in handshake (default: --local-port)\n"
-        "  --device-json PATH    Input device JSON (default ../scanner-node-build/device.json)\n"
+        "  --device-json PATH    Input device JSON (default ../device.json)\n"
         "  --save-device-json P  Write loaded Device JSON to P, then continue\n"
         "  --iq-file PATH        Append captured IQ windows to a SCIQREC1 file\n"
         "  --debug N             0=start/fatal only, 1=console (default), 2=TXT, 3=HTML\n"
@@ -54,7 +54,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
     memset(options, 0, sizeof(*options));
     options->server_address = "82.165.20.164";
     options->bind_address = "0.0.0.0";
-    options->device_json = "../scanner-node-build/device.json";
+    options->device_json = "../device.json";
     options->software_version = "1.1.0.0";
     options->server_port = 2653;
     options->local_port = 3333;
@@ -114,7 +114,7 @@ int scanner_options_parse(int argc, char **argv, ScannerOptions *options)
             options->software_version = value;
         }
         else if (strcmp(argument, "--server-port") == 0 || strcmp(argument, "--local-port") == 0
-             || strcmp(argument, "--reply-port") == 0)
+                 || strcmp(argument, "--reply-port") == 0)
         {
             if (!parse_unsigned(value, 65535, &parsed))
             {
