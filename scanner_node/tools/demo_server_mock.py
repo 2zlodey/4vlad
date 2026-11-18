@@ -31,6 +31,8 @@ MEASURE_FREQUENCY_COMMAND = 0x02
 SWEEP_COMMAND = 0x03
 GET_RAW_IQ_COMMAND = 0x70
 SAVE_IQ_TO_FILE_COMMAND = 0x71
+DETECT_START_COMMAND = 0x72
+DETECT_GET_RESULT_COMMAND = 0x73
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -211,6 +213,40 @@ def build_measure_frequency_request(request_id, channel, frequency_khz):
 
 def build_sweep_request(request_id, channel, start_khz, stop_khz):
     return struct.pack("<IBBII", request_id, SWEEP_COMMAND, channel, start_khz, stop_khz)
+
+
+def build_detect_start_request(request_id, channel, start_khz, stop_khz, step_khz, fft_size, averages):
+    return struct.pack("<IBBIIIHH", request_id, DETECT_START_COMMAND, channel, start_khz, stop_khz,
+                       step_khz, fft_size, averages)
+
+
+def build_detect_result_request(request_id, job_id):
+    return struct.pack("<IBI", request_id, DETECT_GET_RESULT_COMMAND, job_id)
+
+
+def parse_detect_start_response(payload, expected_id):
+    if len(payload) != 10:
+        raise MockProtocolError("detector START response must have 10 bytes")
+    request_id, command, status, job_id = struct.unpack("<IBBI", payload)
+    if (request_id, command, status) != (expected_id, DETECT_START_COMMAND, RADIO_STATUS_OK) or job_id == 0:
+        raise MockProtocolError("detector START response header or job id is invalid")
+    return job_id
+
+
+def parse_detect_result_response(payload, expected_id, expected_job_id):
+    if len(payload) != 46:
+        raise MockProtocolError("detector result response must have 46 bytes")
+    values = struct.unpack("<IBBIBHIHQQQhB", payload)
+    (request_id, command, status, job_id, state, progress, current_khz, detections,
+     center_hz, lower_hz, upper_hz, snr_cdbfs, iq_recorded) = values
+    if (request_id, command, job_id) != (expected_id, DETECT_GET_RESULT_COMMAND, expected_job_id):
+        raise MockProtocolError("detector result response request id, command, or job id mismatch")
+    if status != RADIO_STATUS_OK or state not in (1, 2) or progress > 1000 or iq_recorded not in (0, 1):
+        raise MockProtocolError("detector result response status or state is invalid")
+    if detections and not (0 < lower_hz <= center_hz <= upper_hz and snr_cdbfs > 0):
+        raise MockProtocolError("detector candidate frequency or SNR is invalid")
+    return {"state": state, "progress": progress, "current_khz": current_khz,
+            "detections": detections, "iq_recorded": bool(iq_recorded)}
 
 
 def build_raw_iq_request(request_id, channel, complex_pairs):
@@ -460,7 +496,30 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
     sweep_powers = validate_sweep_response(
         response, sweep_id, 0, [frequency_khz, frequency_khz + 100], tolerance_khz=1
     )
-    restore_id = next_request_id(sweep_id)
+    detect_start_id = next_request_id(sweep_id)
+    response = exchange_radio_request(
+        sock, endpoint,
+        build_detect_start_request(detect_start_id, 0, frequency_khz, frequency_khz + 100, 100000, 512, 2),
+    )
+    job_id = parse_detect_start_response(response, detect_start_id)
+    busy_start_id = next_request_id(detect_start_id)
+    response = exchange_radio_request(
+        sock, endpoint,
+        build_detect_start_request(busy_start_id, 0, frequency_khz, frequency_khz, 100000, 512, 1),
+    )
+    if response != struct.pack("<IBBI", busy_start_id, DETECT_START_COMMAND, 10, 0):
+        raise MockProtocolError("a second detector START was not rejected as busy")
+    detect_result = None
+    request_cursor = busy_start_id
+    for _ in range(8):
+        request_cursor = next_request_id(request_cursor)
+        response = exchange_radio_request(sock, endpoint, build_detect_result_request(request_cursor, job_id))
+        detect_result = parse_detect_result_response(response, request_cursor, job_id)
+        if detect_result["state"] == 2:
+            break
+    if detect_result is None or detect_result["state"] != 2 or detect_result["progress"] != 1000:
+        raise MockProtocolError("asynchronous detector job did not complete")
+    restore_id = next_request_id(request_cursor)
     response = exchange_radio_request(
         sock, endpoint, build_set_frequency_request(restore_id, 0, frequency_khz)
     )
@@ -477,6 +536,9 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "saved_iq_bytes": saved_iq_bytes,
         "frequency_power": True,
         "sweep_points": len(sweep_powers),
+        "detector_complete": detect_result["state"] == 2,
+        "detector_detections": detect_result["detections"],
+        "detector_iq_recorded": detect_result["iq_recorded"],
     }
 
 

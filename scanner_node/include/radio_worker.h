@@ -24,9 +24,14 @@ typedef struct
 typedef int (*ScannerRadioWorkerHandler)(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
                                          const ScannerDatagram *request, ScannerRadioWorkerResult *result,
                                          void *context);
+typedef void (*ScannerRadioWorkerIdleHandler)(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
+                                              void *context);
 
 int scanner_radio_worker_start(ScannerRadioWorker **worker, ScannerRadioInventory *inventory,
                                ScannerRadioWorkerHandler handler, void *context, char *error, size_t error_size);
+int scanner_radio_worker_start_with_idle(ScannerRadioWorker **worker, ScannerRadioInventory *inventory,
+                                         ScannerRadioWorkerHandler handler, ScannerRadioWorkerIdleHandler idle_handler,
+                                         void *context, char *error, size_t error_size);
 int scanner_radio_worker_submit(ScannerRadioWorker *worker, const ScannerDatagram *request);
 int scanner_radio_worker_receive(ScannerRadioWorker *worker, ScannerRadioWorkerResult *result);
 void scanner_radio_worker_cancel_for_exit(ScannerRadioWorker *worker);

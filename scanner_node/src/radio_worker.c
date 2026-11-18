@@ -1,3 +1,7 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "radio_worker.h"
 #include "worker_sync.h"
 
@@ -15,6 +19,7 @@ struct ScannerRadioWorker
 {
     ScannerRadioInventory *inventory;
     ScannerRadioWorkerHandler handler;
+    ScannerRadioWorkerIdleHandler idle_handler;
     void *context;
     ScannerMutex mutex;
     ScannerCondition request_ready;
@@ -71,7 +76,15 @@ static void worker_run(ScannerRadioWorker *worker)
 
         scanner_mutex_lock(&worker->mutex);
         while (worker->request_count == 0 && !worker->stopping)
-            scanner_condition_wait(&worker->request_ready, &worker->mutex);
+        {
+            if (scanner_condition_wait_timeout(&worker->request_ready, &worker->mutex, 50u)
+                && worker->idle_handler != NULL)
+            {
+                scanner_mutex_unlock(&worker->mutex);
+                worker->idle_handler(worker, worker->inventory, worker->context);
+                scanner_mutex_lock(&worker->mutex);
+            }
+        }
         if (worker->stopping)
         {
             scanner_mutex_unlock(&worker->mutex);
@@ -104,6 +117,9 @@ static void worker_run(ScannerRadioWorker *worker)
         if ((result.size > 0 || result.fatal || result.close_after_send) && !publish_result(worker, &result))
             action = 0;
 
+        if (worker->idle_handler != NULL && action == 1 && !result.fatal && !result.close_after_send)
+            worker->idle_handler(worker, worker->inventory, worker->context);
+
         scanner_mutex_lock(&worker->mutex);
         worker->current_active = 0;
         worker->cancel_current = 0;
@@ -129,8 +145,9 @@ static void *worker_thread_entry(void *context)
 }
 #endif
 
-int scanner_radio_worker_start(ScannerRadioWorker **worker_out, ScannerRadioInventory *inventory,
-                               ScannerRadioWorkerHandler handler, void *context, char *error, size_t error_size)
+int scanner_radio_worker_start_with_idle(ScannerRadioWorker **worker_out, ScannerRadioInventory *inventory,
+                                         ScannerRadioWorkerHandler handler, ScannerRadioWorkerIdleHandler idle_handler,
+                                         void *context, char *error, size_t error_size)
 {
     ScannerRadioWorker *worker;
 #ifndef _WIN32
@@ -147,6 +164,7 @@ int scanner_radio_worker_start(ScannerRadioWorker **worker_out, ScannerRadioInve
     }
     worker->inventory = inventory;
     worker->handler = handler;
+    worker->idle_handler = idle_handler;
     worker->context = context;
 #ifdef _WIN32
     InitializeCriticalSection(&worker->mutex);
@@ -198,6 +216,12 @@ int scanner_radio_worker_start(ScannerRadioWorker **worker_out, ScannerRadioInve
 #endif
     *worker_out = worker;
     return 1;
+}
+
+int scanner_radio_worker_start(ScannerRadioWorker **worker_out, ScannerRadioInventory *inventory,
+                               ScannerRadioWorkerHandler handler, void *context, char *error, size_t error_size)
+{
+    return scanner_radio_worker_start_with_idle(worker_out, inventory, handler, NULL, context, error, error_size);
 }
 
 int scanner_radio_worker_submit(ScannerRadioWorker *worker, const ScannerDatagram *request)

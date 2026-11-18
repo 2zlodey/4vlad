@@ -205,6 +205,24 @@
  */
 #define SCANNER_SAVE_IQ_TO_FILE_COMMAND 0x71u
 
+/* Start/poll a bounded asynchronous CFAR scan; one job is active per node. */
+#define SCANNER_DETECT_START_COMMAND 0x72u
+#define SCANNER_DETECT_GET_RESULT_COMMAND 0x73u
+#define SCANNER_DETECT_MAX_FREQUENCIES 128u
+#define SCANNER_DETECT_MAX_AVERAGES 32u
+#define SCANNER_DETECT_START_REQUEST_SIZE 22u
+#define SCANNER_DETECT_START_RESPONSE_SIZE 10u
+#define SCANNER_DETECT_RESULT_REQUEST_SIZE 9u
+#define SCANNER_DETECT_RESULT_RESPONSE_SIZE 46u
+
+typedef enum
+{
+    SCANNER_DETECT_STATE_IDLE = 0,
+    SCANNER_DETECT_STATE_RUNNING = 1,
+    SCANNER_DETECT_STATE_COMPLETE = 2,
+    SCANNER_DETECT_STATE_FAILED = 3
+} ScannerDetectState;
+
 #define SCANNER_MAX_SWEEP_POINTS 128u
 #define SCANNER_MAX_RAW_IQ_PAIRS SCANNER_RADIO_MAX_IQ_PAIRS
 #define SCANNER_RAW_IQ_RESPONSE_HEADER_SIZE 10u
@@ -221,6 +239,7 @@
 #define SCANNER_RADIO_STATUS_HARDWARE_ERROR 7u
 #define SCANNER_RADIO_STATUS_UNSUPPORTED 8u
 #define SCANNER_RADIO_STATUS_CAPTURE_ERROR 9u
+#define SCANNER_RADIO_STATUS_BUSY 10u
 
 #define SCANNER_RADIO_CAPABILITY_WIRE_SIZE 128u
 #define SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE                                                                      \
@@ -319,6 +338,23 @@ typedef struct
     uint16_t complex_pairs;
 } ScannerRawIqRequest;
 
+typedef struct
+{
+    uint32_t request_id;
+    uint8_t channel;
+    uint32_t start_khz;
+    uint32_t stop_khz;
+    uint32_t step_khz;
+    uint16_t fft_size;
+    uint16_t averages;
+} ScannerDetectStartRequest;
+
+typedef struct
+{
+    uint32_t request_id;
+    uint32_t job_id;
+} ScannerDetectResultRequest;
+
 void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
                               const ScannerDevice *device);
 int scanner_decode_ver_request(const uint8_t *bytes, size_t size, uint32_t *request_id);
@@ -348,6 +384,8 @@ int scanner_decode_measure_frequency_request(const uint8_t *bytes, size_t size,
 int scanner_decode_sweep_request(const uint8_t *bytes, size_t size, ScannerSweepRequest *request);
 int scanner_decode_raw_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request);
 int scanner_decode_save_iq_request(const uint8_t *bytes, size_t size, ScannerRawIqRequest *request);
+int scanner_decode_detect_start_request(const uint8_t *bytes, size_t size, ScannerDetectStartRequest *request);
+int scanner_decode_detect_result_request(const uint8_t *bytes, size_t size, ScannerDetectResultRequest *request);
 
 size_t scanner_encode_radio_frontends_response(uint8_t *output, size_t output_capacity, uint32_t request_id,
                                                const ScannerRadioInventory *inventory);
@@ -374,5 +412,12 @@ size_t scanner_encode_iq_file_response(uint8_t output[14], uint32_t request_id, 
 size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t request_id, uint8_t status,
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
                                      const int16_t *noise_floor_cdbfs);
+size_t scanner_encode_detect_start_response(uint8_t output[SCANNER_DETECT_START_RESPONSE_SIZE], uint32_t request_id,
+                                            uint8_t status, uint32_t job_id);
+size_t scanner_encode_detect_result_response(uint8_t output[SCANNER_DETECT_RESULT_RESPONSE_SIZE],
+                                             uint32_t request_id, uint8_t status, uint32_t job_id,
+                                             uint8_t state, uint16_t progress, uint32_t current_frequency_khz,
+                                             uint16_t detection_count, uint64_t center_hz, uint64_t lower_hz,
+                                             uint64_t upper_hz, int16_t snr_cdbfs, uint8_t iq_recorded);
 
 #endif

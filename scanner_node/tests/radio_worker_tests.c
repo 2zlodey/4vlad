@@ -20,6 +20,27 @@ static int echo_request(ScannerRadioWorker *worker, ScannerRadioInventory *inven
     return 1;
 }
 
+static void idle_tick(ScannerRadioWorker *worker, ScannerRadioInventory *inventory, void *context)
+{
+    int *ticks = (int *)context;
+    (void)worker;
+    (void)inventory;
+#ifdef _WIN32
+    (void)InterlockedIncrement((volatile LONG *)ticks);
+#else
+    (void)__sync_add_and_fetch(ticks, 1);
+#endif
+}
+
+static int read_ticks(const int *ticks)
+{
+#ifdef _WIN32
+    return (int)InterlockedCompareExchange((volatile LONG *)ticks, 0, 0);
+#else
+    return __sync_add_and_fetch((int *)ticks, 0);
+#endif
+}
+
 static void short_delay(void)
 {
 #ifdef _WIN32
@@ -37,6 +58,7 @@ int main(void)
     ScannerRadioWorkerResult result;
     ScannerDatagram request;
     char error[256];
+    int idle_ticks = 0;
     unsigned int attempt;
     int ok = 1;
 
@@ -50,9 +72,18 @@ int main(void)
     request.payload[3] = 0x12;
     request.payload[4] = SCANNER_VER_COMMAND;
 
-    if (!scanner_radio_worker_start(&worker, &inventory, echo_request, NULL, error, sizeof(error)))
+    if (!scanner_radio_worker_start_with_idle(&worker, &inventory, echo_request, idle_tick, &idle_ticks, error,
+                                              sizeof(error)))
     {
         fprintf(stderr, "FAIL: worker start: %s\n", error);
+        return 1;
+    }
+    for (attempt = 0; attempt < 2000 && read_ticks(&idle_ticks) == 0; ++attempt)
+        short_delay();
+    if (read_ticks(&idle_ticks) == 0)
+    {
+        fprintf(stderr, "FAIL: worker did not run its idle callback\n");
+        scanner_radio_worker_stop(&worker);
         return 1;
     }
     if (!scanner_radio_worker_submit(worker, &request))

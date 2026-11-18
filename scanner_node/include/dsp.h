@@ -69,4 +69,9 @@ int scanner_dsp_extract_features(const double *psd_dbfs_per_hz, size_t bin_count
                                  double detection_threshold_db, size_t minimum_band_bins, ScannerDspFeatures *features,
                                  ScannerDspSignalBand *bands, size_t band_capacity);
 
+/* Mark FFT-shifted PSD bins using nominal CA-CFAR scaling for independent exponential power bins. */
+int scanner_dsp_cfar_detect(const double *psd_dbfs_per_hz, size_t bin_count, size_t training_bins_per_side,
+                            size_t guard_bins_per_side, double false_alarm_probability, uint8_t *active_bins,
+                            size_t active_capacity);
+
 #endif

@@ -78,6 +78,7 @@ static int run_node(const ScannerOptions *options)
     unsigned int attempt;
     int result = 0;
 
+    memset(&app_context, 0, sizeof(app_context));
     memset(&socket_handle, 0, sizeof(socket_handle));
     socket_handle.handle = SCANNER_INVALID_SOCKET;
     perf_init();
@@ -154,8 +155,8 @@ static int run_node(const ScannerOptions *options)
     app_context.analysis_worker = analysis_worker;
     LG('+', "Analysis worker started");
     app_context.iq_file = iq_file;
-    if (!scanner_radio_worker_start(&radio_worker, &radio_inventory, scanner_radio_command_handle, &app_context, error,
-                                    sizeof(error)))
+    if (!scanner_radio_worker_start_with_idle(&radio_worker, &radio_inventory, scanner_radio_command_handle,
+                                              scanner_radio_detector_idle, &app_context, error, sizeof(error)))
     {
         LGF("%s", error);
         result = 0;

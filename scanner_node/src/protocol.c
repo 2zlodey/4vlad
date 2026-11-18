@@ -570,3 +570,75 @@ int scanner_decode_save_iq_request(const uint8_t *bytes, size_t size, ScannerRaw
     request->complex_pairs = read_u16_le(bytes + 6);
     return request->complex_pairs > 0 && request->complex_pairs <= SCANNER_RADIO_MAX_IQ_PAIRS;
 }
+
+int scanner_decode_detect_start_request(const uint8_t *bytes, size_t size, ScannerDetectStartRequest *request)
+{
+    uint64_t frequency_count;
+    uint16_t fft_size;
+    if (bytes == NULL || request == NULL || size != SCANNER_DETECT_START_REQUEST_SIZE
+        || bytes[4] != SCANNER_DETECT_START_COMMAND)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->channel = bytes[5];
+    request->start_khz = read_u32_le(bytes + 6);
+    request->stop_khz = read_u32_le(bytes + 10);
+    request->step_khz = read_u32_le(bytes + 14);
+    request->fft_size = read_u16_le(bytes + 18);
+    request->averages = read_u16_le(bytes + 20);
+    fft_size = request->fft_size;
+    if (request->channel > 1 || request->start_khz < 1000u || request->stop_khz > 7000000u
+        || request->start_khz > request->stop_khz || request->step_khz == 0
+        || fft_size < 64u || fft_size > 4096u
+        || (fft_size & (fft_size - 1u)) != 0 || request->averages == 0
+        || request->averages > SCANNER_DETECT_MAX_AVERAGES)
+        return 0;
+    frequency_count = ((uint64_t)request->stop_khz - request->start_khz + request->step_khz - 1u)
+                      / request->step_khz + 1u;
+    return frequency_count <= SCANNER_DETECT_MAX_FREQUENCIES;
+}
+
+int scanner_decode_detect_result_request(const uint8_t *bytes, size_t size, ScannerDetectResultRequest *request)
+{
+    if (bytes == NULL || request == NULL || size != SCANNER_DETECT_RESULT_REQUEST_SIZE
+        || bytes[4] != SCANNER_DETECT_GET_RESULT_COMMAND)
+        return 0;
+    request->request_id = read_u32_le(bytes);
+    request->job_id = read_u32_le(bytes + 5);
+    return request->job_id != 0;
+}
+
+size_t scanner_encode_detect_start_response(uint8_t output[SCANNER_DETECT_START_RESPONSE_SIZE], uint32_t request_id,
+                                            uint8_t status, uint32_t job_id)
+{
+    if (output == NULL)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_DETECT_START_COMMAND;
+    output[5] = status;
+    write_le(output + 6, job_id, 4);
+    return SCANNER_DETECT_START_RESPONSE_SIZE;
+}
+
+size_t scanner_encode_detect_result_response(uint8_t output[SCANNER_DETECT_RESULT_RESPONSE_SIZE],
+                                             uint32_t request_id, uint8_t status, uint32_t job_id,
+                                             uint8_t state, uint16_t progress, uint32_t current_frequency_khz,
+                                             uint16_t detection_count, uint64_t center_hz, uint64_t lower_hz,
+                                             uint64_t upper_hz, int16_t snr_cdbfs, uint8_t iq_recorded)
+{
+    if (output == NULL || state > SCANNER_DETECT_STATE_FAILED || progress > 1000u)
+        return 0;
+    write_le(output, request_id, 4);
+    output[4] = SCANNER_DETECT_GET_RESULT_COMMAND;
+    output[5] = status;
+    write_le(output + 6, job_id, 4);
+    output[10] = state;
+    write_le(output + 11, progress, 2);
+    write_le(output + 13, current_frequency_khz, 4);
+    write_le(output + 17, detection_count, 2);
+    write_le(output + 19, center_hz, 8);
+    write_le(output + 27, lower_hz, 8);
+    write_le(output + 35, upper_hz, 8);
+    write_le(output + 43, (uint16_t)snr_cdbfs, 2);
+    output[45] = iq_recorded ? 1u : 0u;
+    return SCANNER_DETECT_RESULT_RESPONSE_SIZE;
+}

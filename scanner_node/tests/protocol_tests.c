@@ -35,6 +35,13 @@ int main(int argc, char **argv)
                                                       1,    0xa0, 0x86, 0x01, 0x00 };
     const uint8_t get_frequency_request_bytes[6] = { 0x0d, 0x00, 0x00, 0x00, SCANNER_GET_FREQUENCY_COMMAND, 1 };
     const uint8_t get_gain_stages_request_bytes[6] = { 0x21, 0x43, 0x65, 0x87, SCANNER_GET_GAIN_STAGES_COMMAND, 0 };
+    const uint8_t detect_start_request_bytes[SCANNER_DETECT_START_REQUEST_SIZE] = {
+        0x78, 0x56, 0x34, 0x12, SCANNER_DETECT_START_COMMAND, 0, 0xa0, 0x86, 0x01, 0x00, 0x40,
+        0x0d, 0x03, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x00, 0x02, 0x02, 0x00
+    };
+    const uint8_t detect_result_request_bytes[SCANNER_DETECT_RESULT_REQUEST_SIZE] = {
+        0x78, 0x56, 0x34, 0x12, SCANNER_DETECT_GET_RESULT_COMMAND, 1, 0, 0, 0
+    };
     const uint8_t select_request_bytes[SCANNER_RADIO_REQUEST_HEADER_SIZE + 1] = { 0x09, 0x00, 0x00, 0x00, 0x05, 0x00 };
     uint8_t frontends_response[SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE];
     uint8_t select_response[7];
@@ -42,6 +49,8 @@ int main(int argc, char **argv)
     uint8_t frequency_response[11];
     uint8_t iq_file_response[14];
     uint8_t gain_stages_response[9];
+    uint8_t detect_start_response[SCANNER_DETECT_START_RESPONSE_SIZE];
+    uint8_t detect_result_response[SCANNER_DETECT_RESULT_RESPONSE_SIZE];
     ScannerRadioFrontendsRequest frontends_request;
     ScannerSetActiveRadioRequest select_request;
     ScannerExitRequest exit_request;
@@ -49,6 +58,8 @@ int main(int argc, char **argv)
     ScannerGetFrequencyRequest get_frequency_request;
     ScannerRawIqRequest save_iq_request;
     ScannerGetValueRequest get_gain_stages_request;
+    ScannerDetectStartRequest detect_start_request;
+    ScannerDetectResultRequest detect_result_request;
     ScannerRadioInventory inventory;
     ScannerRadioInventory close_inventory;
     uint32_t ver_request_id = 0;
@@ -128,6 +139,32 @@ int main(int argc, char **argv)
     ok &= require_true(!scanner_decode_command_header(unknown_command_bytes, sizeof(unknown_command_bytes) - 1,
                                                       &command_request_id, &command_opcode),
                        "Short command header was accepted");
+    ok &= require_true(scanner_decode_detect_start_request(detect_start_request_bytes,
+                                                          sizeof(detect_start_request_bytes), &detect_start_request)
+                           && detect_start_request.request_id == UINT32_C(0x12345678)
+                           && detect_start_request.start_khz == 100000 && detect_start_request.stop_khz == 200000
+                           && detect_start_request.step_khz == 100000 && detect_start_request.fft_size == 512
+                           && detect_start_request.averages == 2,
+                       "Detector START request decode failed");
+    ok &= require_true(scanner_decode_detect_result_request(detect_result_request_bytes,
+                                                            sizeof(detect_result_request_bytes), &detect_result_request)
+                           && detect_result_request.job_id == 1,
+                       "Detector GET_RESULT request decode failed");
+    ok &= require_true(scanner_encode_detect_start_response(detect_start_response, UINT32_C(0x12345678),
+                                                            SCANNER_RADIO_STATUS_OK, 1)
+                               == sizeof(detect_start_response)
+                           && detect_start_response[4] == SCANNER_DETECT_START_COMMAND
+                           && detect_start_response[5] == SCANNER_RADIO_STATUS_OK && detect_start_response[6] == 1,
+                       "Detector START response encoding failed");
+    ok &= require_true(scanner_encode_detect_result_response(
+                           detect_result_response, UINT32_C(0x12345678), SCANNER_RADIO_STATUS_OK, 1,
+                           SCANNER_DETECT_STATE_COMPLETE, 1000, 200000, 3, UINT64_C(200010000),
+                           UINT64_C(200000000), UINT64_C(200020000), 1250, 1)
+                               == sizeof(detect_result_response)
+                           && detect_result_response[4] == SCANNER_DETECT_GET_RESULT_COMMAND
+                           && detect_result_response[10] == SCANNER_DETECT_STATE_COMPLETE
+                           && detect_result_response[45] == 1,
+                       "Detector result response encoding failed");
     ok &= require_true(scanner_encode_unsupported_response(unsupported_response, command_request_id, command_opcode)
                                == sizeof(unsupported_response)
                            && memcmp(unsupported_response, "\x21\x43\x65\x87\x7f\x08", sizeof(unsupported_response))

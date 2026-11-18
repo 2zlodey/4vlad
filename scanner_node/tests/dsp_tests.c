@@ -47,8 +47,13 @@ int main(void)
     static const uint8_t s16_q11_quarter_power[] = { 0x00, 0x04, 0x00, 0x04, 0x00, 0xfc, 0x00, 0xfc };
     uint8_t tone_iq[1024u * 2u];
     double psd[256];
+    double cfar_psd[128];
+    uint8_t cfar_active[128];
+    double noise_psd[2048];
+    uint8_t noise_active[2048];
     size_t psd_bins = 0;
     size_t sample;
+    size_t false_alarms = 0;
     ScannerDspFeatures features;
     ScannerDspSignalBand bands[SCANNER_DSP_MAX_SIGNAL_BANDS];
     ScannerClassification classification;
@@ -124,6 +129,32 @@ int main(void)
     ok &= require_true(!scanner_dsp_welch_psd_dbfs_hz(tone_iq, sizeof(tone_iq), 1024, SCANNER_DSP_IQ_FORMAT_S8, 256000,
                                                       255, psd, 256, &psd_bins),
                        "Welch PSD accepted a non-power-of-two FFT size");
+
+    for (sample = 0; sample < 128; ++sample)
+        cfar_psd[sample] = -100.0 + 0.3 * sample;
+    for (sample = 62; sample <= 65; ++sample)
+        cfar_psd[sample] += 18.0;
+    ok &= require_true(scanner_dsp_cfar_detect(cfar_psd, 128, 12, 2, 1e-3, cfar_active, 128),
+                       "CA-CFAR rejected a valid PSD");
+    ok &= require_true(cfar_active[63] && cfar_active[64] && !cfar_active[30] && !cfar_active[100],
+                       "CA-CFAR failed to detect a signal on a sloped noise floor");
+    ok &= require_true(!scanner_dsp_cfar_detect(cfar_psd, 128, 0, 2, 1e-3, cfar_active, 128),
+                       "CA-CFAR accepted zero training bins");
+    {
+        uint32_t random_state = UINT32_C(0x13579bdf);
+        for (sample = 0; sample < 2048; ++sample)
+        {
+            double uniform;
+            random_state = random_state * UINT32_C(1664525) + UINT32_C(1013904223);
+            uniform = ((double)random_state + 1.0) / 4294967297.0;
+            noise_psd[sample] = 10.0 * log10(-log(uniform));
+        }
+        ok &= require_true(scanner_dsp_cfar_detect(noise_psd, 2048, 12, 2, 1e-3, noise_active, 2048),
+                           "CA-CFAR rejected a noise-only spectrum");
+        for (sample = 0; sample < 2048; ++sample)
+            false_alarms += noise_active[sample] != 0;
+        ok &= require_true(false_alarms <= 12, "CA-CFAR produced excessive alarms on exponential noise bins");
+    }
 
     if (ok)
         puts("DSP noise-floor, PSD, feature, and classifier tests passed.");

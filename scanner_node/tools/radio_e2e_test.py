@@ -194,12 +194,15 @@ def main():
     if (not command_checks or command_checks.get("raw_iq_bytes") != expected_raw_iq_bytes
             or command_checks.get("saved_iq_bytes") != expected_raw_iq_bytes
             or command_checks.get("sweep_points") != 1
+            or not command_checks.get("detector_complete")
+            or command_checks.get("detector_detections", 0) < 1
+            or not command_checks.get("detector_iq_recorded")
             or not command_checks.get("sdr_reinitialized")
             or "gain_stage_readback_supported" not in command_checks):
         raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")
-    recorded_count = validate_iq_recording(iq_file, len(inventory["frontends"]) * 6)
+    recorded_count = validate_iq_recording(iq_file, len(inventory["frontends"]) * 10)
     print(
-        "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/file-save/sweep=OK, neutral close=OK raw-IQ={}B records={} IQ={}bit/fmt{} AGC=0x{:02x}".format(
+        "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/file-save/sweep/async-CFAR=OK, neutral close=OK raw-IQ={}B records={} IQ={}bit/fmt{} AGC=0x{:02x}".format(
             len(inventory["frontends"]),
             args.frontend_id,
             selected["rx_channels"],

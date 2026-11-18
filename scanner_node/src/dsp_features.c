@@ -139,3 +139,75 @@ int scanner_dsp_extract_features(const double *psd_dbfs_per_hz, size_t bin_count
     free(linear);
     return 1;
 }
+
+int scanner_dsp_cfar_detect(const double *psd_dbfs_per_hz, size_t bin_count, size_t training_bins_per_side,
+                            size_t guard_bins_per_side, double false_alarm_probability, uint8_t *active_bins,
+                            size_t active_capacity)
+{
+    size_t index;
+    size_t training_count;
+    double threshold_scale;
+
+    if (psd_dbfs_per_hz == NULL || active_bins == NULL || bin_count == 0 || active_capacity < bin_count
+        || training_bins_per_side == 0 || false_alarm_probability <= 0.0 || false_alarm_probability >= 1.0
+        || !isfinite(false_alarm_probability)
+        || guard_bins_per_side > (SIZE_MAX - training_bins_per_side - 1u) / 2u)
+        return 0;
+    if (training_bins_per_side > SIZE_MAX / 2u)
+        return 0;
+    training_count = training_bins_per_side * 2u;
+    threshold_scale = training_count * (pow(false_alarm_probability, -1.0 / training_count) - 1.0);
+
+    for (index = 0; index < bin_count; ++index)
+    {
+        size_t offset;
+        double noise_sum = 0.0;
+        int valid = 1;
+        size_t side;
+
+        if (!isfinite(psd_dbfs_per_hz[index]))
+            return 0;
+        for (side = 0; side < 2; ++side)
+        {
+            for (offset = 1; offset <= training_bins_per_side; ++offset)
+            {
+                size_t distance = guard_bins_per_side + offset;
+                size_t training_index;
+                double power;
+                if (side == 0)
+                {
+                    if (index < distance)
+                    {
+                        valid = 0;
+                        break;
+                    }
+                    training_index = index - distance;
+                }
+                else
+                {
+                    if (distance > bin_count - 1u - index)
+                    {
+                        valid = 0;
+                        break;
+                    }
+                    training_index = index + distance;
+                }
+                if (!isfinite(psd_dbfs_per_hz[training_index]))
+                    return 0;
+                power = pow(10.0, psd_dbfs_per_hz[training_index] / 10.0);
+                if (!isfinite(power))
+                    return 0;
+                noise_sum += power;
+            }
+            if (!valid)
+                break;
+        }
+        if (!valid)
+        {
+            active_bins[index] = 0;
+            continue;
+        }
+        active_bins[index] = pow(10.0, psd_dbfs_per_hz[index] / 10.0) > threshold_scale * noise_sum / training_count;
+    }
+    return 1;
+}
