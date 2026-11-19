@@ -1,6 +1,7 @@
 #include "scanner_options.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int require_true(int condition, const char *message)
 {

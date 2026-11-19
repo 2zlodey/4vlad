@@ -1,9 +1,30 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "dsp.h"
 
+#include <fftw3.h>
 #include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+static SRWLOCK fftw_access_lock = SRWLOCK_INIT;
+static void fftw_lifecycle_lock_acquire(void) { AcquireSRWLockExclusive(&fftw_access_lock); }
+static void fftw_lifecycle_lock_release(void) { ReleaseSRWLockExclusive(&fftw_access_lock); }
+static void fftw_execution_lock_acquire(void) { AcquireSRWLockShared(&fftw_access_lock); }
+static void fftw_execution_lock_release(void) { ReleaseSRWLockShared(&fftw_access_lock); }
+#else
+#include <pthread.h>
+static pthread_rwlock_t fftw_access_lock = PTHREAD_RWLOCK_INITIALIZER;
+static void fftw_lifecycle_lock_acquire(void) { (void)pthread_rwlock_wrlock(&fftw_access_lock); }
+static void fftw_lifecycle_lock_release(void) { (void)pthread_rwlock_unlock(&fftw_access_lock); }
+static void fftw_execution_lock_acquire(void) { (void)pthread_rwlock_rdlock(&fftw_access_lock); }
+static void fftw_execution_lock_release(void) { (void)pthread_rwlock_unlock(&fftw_access_lock); }
+#endif
 
 static int32_t decode_s8(uint8_t value) { return value <= INT8_MAX ? (int32_t)value : (int32_t)value - 256; }
 
@@ -13,68 +34,7 @@ static int32_t decode_s16_le(const uint8_t *bytes)
     return value <= INT16_MAX ? (int32_t)value : (int32_t)value - 65536;
 }
 
-typedef struct
-{
-    double real;
-    double imaginary;
-} ScannerDspComplex;
-
 static int is_power_of_two(size_t value) { return value != 0 && (value & (value - 1u)) == 0; }
-
-static void fft_forward(ScannerDspComplex *values, size_t count)
-{
-    size_t index;
-    size_t reversed = 0;
-    size_t length;
-    for (index = 1; index < count; ++index)
-    {
-        size_t bit = count >> 1;
-        while (reversed & bit)
-        {
-            reversed ^= bit;
-            bit >>= 1;
-        }
-        reversed ^= bit;
-        if (index < reversed)
-        {
-            ScannerDspComplex temporary = values[index];
-            values[index] = values[reversed];
-            values[reversed] = temporary;
-        }
-    }
-
-    for (length = 2; length <= count; length <<= 1)
-    {
-        double angle = -2.0 * 3.14159265358979323846 / (double)length;
-        double root_real = cos(angle);
-        double root_imaginary = sin(angle);
-        size_t base;
-        for (base = 0; base < count; base += length)
-        {
-            double twiddle_real = 1.0;
-            double twiddle_imaginary = 0.0;
-            size_t offset;
-            for (offset = 0; offset < length / 2u; ++offset)
-            {
-                ScannerDspComplex even = values[base + offset];
-                ScannerDspComplex odd = values[base + offset + length / 2u];
-                double product_real = odd.real * twiddle_real - odd.imaginary * twiddle_imaginary;
-                double product_imaginary = odd.real * twiddle_imaginary + odd.imaginary * twiddle_real;
-                values[base + offset].real = even.real + product_real;
-                values[base + offset].imaginary = even.imaginary + product_imaginary;
-                values[base + offset + length / 2u].real = even.real - product_real;
-                values[base + offset + length / 2u].imaginary = even.imaginary - product_imaginary;
-                {
-                    double next_real = twiddle_real * root_real - twiddle_imaginary * root_imaginary;
-                    twiddle_imaginary = twiddle_real * root_imaginary + twiddle_imaginary * root_real;
-                    twiddle_real = next_real;
-                }
-            }
-        }
-        if (length == count)
-            break;
-    }
-}
 
 static int decode_iq_component(const uint8_t *iq, size_t component_index, uint8_t sample_format, double full_scale,
                                double *sample)
@@ -102,7 +62,8 @@ int scanner_dsp_welch_psd_dbfs_hz(const uint8_t *iq, size_t iq_size, size_t comp
     double window_energy = 0.0;
     double *window;
     double *power_sum;
-    ScannerDspComplex *fft_values;
+    fftw_complex *fft_values;
+    fftw_plan fft_plan;
 
     if (iq == NULL || output_dbfs_per_hz == NULL || output_bin_count == NULL || sample_rate_hz == 0
         || !is_power_of_two(fft_size) || fft_size < SCANNER_DSP_MIN_FFT_SIZE || fft_size > SCANNER_DSP_MAX_FFT_SIZE
@@ -130,12 +91,22 @@ int scanner_dsp_welch_psd_dbfs_hz(const uint8_t *iq, size_t iq_size, size_t comp
     segment_count = 1u + (complex_sample_count - fft_size) / hop_size;
     window = (double *)malloc(fft_size * sizeof(*window));
     power_sum = (double *)calloc(fft_size, sizeof(*power_sum));
-    fft_values = (ScannerDspComplex *)malloc(fft_size * sizeof(*fft_values));
+    fft_values = (fftw_complex *)fftw_malloc(fft_size * sizeof(*fft_values));
     if (window == NULL || power_sum == NULL || fft_values == NULL)
     {
         free(window);
         free(power_sum);
-        free(fft_values);
+        fftw_free(fft_values);
+        return 0;
+    }
+    fftw_lifecycle_lock_acquire();
+    fft_plan = fftw_plan_dft_1d((int)fft_size, fft_values, fft_values, FFTW_FORWARD, FFTW_ESTIMATE);
+    fftw_lifecycle_lock_release();
+    if (fft_plan == NULL)
+    {
+        free(window);
+        free(power_sum);
+        fftw_free(fft_values);
         return 0;
     }
     for (bin = 0; bin < fft_size; ++bin)
@@ -170,15 +141,17 @@ int scanner_dsp_welch_psd_dbfs_hz(const uint8_t *iq, size_t iq_size, size_t comp
             size_t component_index = (start + sample) * 2u;
             (void)decode_iq_component(iq, component_index, sample_format, full_scale, &i_value);
             (void)decode_iq_component(iq, component_index + 1u, sample_format, full_scale, &q_value);
-            fft_values[sample].real = (i_value - mean_i) * window[sample];
-            fft_values[sample].imaginary = (q_value - mean_q) * window[sample];
+            fft_values[sample][0] = (i_value - mean_i) * window[sample];
+            fft_values[sample][1] = (q_value - mean_q) * window[sample];
         }
-        fft_forward(fft_values, fft_size);
+        fftw_execution_lock_acquire();
+        fftw_execute(fft_plan);
+        fftw_execution_lock_release();
         for (bin = 0; bin < fft_size; ++bin)
         {
             size_t source_bin = (bin + fft_size / 2u) % fft_size;
-            double real = fft_values[source_bin].real;
-            double imaginary = fft_values[source_bin].imaginary;
+            double real = fft_values[source_bin][0];
+            double imaginary = fft_values[source_bin][1];
             power_sum[bin] += (real * real + imaginary * imaginary)
                               / ((double)sample_rate_hz * window_energy * (double)segment_count);
         }
@@ -187,7 +160,10 @@ int scanner_dsp_welch_psd_dbfs_hz(const uint8_t *iq, size_t iq_size, size_t comp
     for (bin = 0; bin < fft_size; ++bin)
         output_dbfs_per_hz[bin] = power_sum[bin] > 0.0 ? 10.0 * log10(power_sum[bin]) : -300.0;
     *output_bin_count = fft_size;
-    free(fft_values);
+    fftw_lifecycle_lock_acquire();
+    fftw_destroy_plan(fft_plan);
+    fftw_lifecycle_lock_release();
+    fftw_free(fft_values);
     free(power_sum);
     free(window);
     return 1;

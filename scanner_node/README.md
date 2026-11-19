@@ -36,6 +36,7 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | `0x03` | `MEASURE_FREQUENCY_RANGE` | `channel:u8, start_khz:u32, stop_khz:u32` | `channel:u8, frequency_khz:u32, power_cdbfs:i16` (12 B total) |
 | `0x70` | `GET_RAW_IQ` | `channel:u8, complex_pairs:u16` | `status:u8, channel:u8, format:u8, complex_pairs:u16, IQ bytes[]` |
 | `0x71` | `SAVE_IQ_TO_FILE` | `channel:u8, complex_pairs:u16` | `status:u8, channel:u8, format:u8, complex_pairs:u16, payload_bytes:u32` |
+| `0x72/0x73` | `DETECT_START/DETECT_GET_RESULT` | bounded scan parameters / `job_id:u32` | job ID / asynchronous CFAR scan state and candidate |
 | `0xDE` | `EXIT` | none | `status:u8` |
 | `0x69` | `REINITIALIZE_SDR` | none | `status:u8` |
 | `0xC8` | `SELECT_ANTENNA` | `board_channel:u8, antenna:u8` | `status:u8, board_channel:u8, applied_antenna:u8` |
@@ -57,6 +58,7 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | `7` | Hardware error |
 | `8` | Unsupported operation |
 | `9` | Capture failed |
+| `10` | Detector job already running |
 
 `SET_ACTIVE_RADIO` also uses `2` when the frontend ID is absent. `active_id=0xff` means no frontend selected.
 
@@ -83,6 +85,21 @@ Use `--debug N` (default `1`).
 | `3` | HTML log; startup/fatal errors to console |
 
 Log files are created in the working directory as `scanner_YYYYMMDD_HHMMSS_PID_SEQUENCE.txt` or `.html`. Entries include local timestamp and module; packet logs include endpoint, size, and relevant request/response fields. IQ payload samples are not logged.
+
+## FFTW Builds
+
+The DSP backend uses FFTW3. Windows MinGW builds use the `x64-mingw-static` vcpkg triplet; Linux builds use the system `fftw3` pkg-config module. Cross builds need target-architecture FFTW development libraries and the matching pkg-config wrapper.
+
+| Target | Configure example |
+| --- | --- |
+| Windows MinGW x64 | `cmake -S . -B build-fftw -G Ninja -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-mingw-static -DVCPKG_HOST_TRIPLET=x64-mingw-static` |
+| Linux native | `cmake -S . -B build-linux -G Ninja` |
+| ARMHF | `cmake -S . -B build-armhf -G Ninja -DCMAKE_TOOLCHAIN_FILE=devtools/toolchains/armhf-linux.cmake` |
+| AArch64 | `cmake -S . -B build-aarch64 -G Ninja -DCMAKE_TOOLCHAIN_FILE=devtools/toolchains/aarch64-linux.cmake` |
+
+Install FFTW3 development packages first (`fftw3` via vcpkg on Windows, `libfftw3-dev` on Debian/Ubuntu). ARM builds require the matching cross compiler and target `libfftw3-dev` package. FFTW is GPL-2.0-or-later; distributing a linked scanner binary may require GPL compliance. Obtain legal review or a suitable commercial FFTW license before proprietary distribution.
+
+The project keeps the existing native behavior and FFTW's forward-transform convention; FFTW planner operations are serialized across callers. Existing PSD/tone tests cover the frequency-bin ordering and normalization.
 
 ## Run and Test
 

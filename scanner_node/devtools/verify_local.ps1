@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $workspaceRoot = (Resolve-Path (Join-Path $projectRoot '..\..')).Path
-$buildDir = Join-Path $projectRoot 'build'
+$buildDir = Join-Path $projectRoot 'build-fftw'
 
 function Invoke-Checked {
     param(
@@ -24,6 +24,19 @@ function Invoke-Checked {
 }
 
 $cmake = (Get-Command cmake -ErrorAction Stop).Source
+if (-not (Test-Path (Join-Path $buildDir 'CMakeCache.txt'))) {
+    if ([string]::IsNullOrWhiteSpace($env:VCPKG_ROOT)) {
+        throw 'Set VCPKG_ROOT to a vcpkg checkout containing scripts/buildsystems/vcpkg.cmake.'
+    }
+    $toolchain = Join-Path $env:VCPKG_ROOT 'scripts\buildsystems\vcpkg.cmake'
+    if (-not (Test-Path $toolchain)) {
+        throw "vcpkg CMake toolchain was not found: $toolchain"
+    }
+    Invoke-Checked $cmake @('-S', $projectRoot, '-B', $buildDir, '-G', 'Ninja',
+        "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+        '-DVCPKG_TARGET_TRIPLET=x64-mingw-static',
+        '-DVCPKG_HOST_TRIPLET=x64-mingw-static')
+}
 Invoke-Checked $cmake @('--build', $buildDir, '--parallel')
 Invoke-Checked (Join-Path (Split-Path $cmake) 'ctest.exe') @('--test-dir', $buildDir, '--output-on-failure')
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-packages="build-essential clang cmake ninja-build python3 python3-venv pkg-config libusb-1.0-0-dev libhackrf-dev libbladerf-dev"
+packages="build-essential clang cmake ninja-build python3 python3-venv pkg-config libusb-1.0-0-dev libhackrf-dev libbladerf-dev libfftw3-dev"
 build_only=0
 case "${1:-}" in
     '') ;;

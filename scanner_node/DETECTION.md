@@ -9,6 +9,7 @@
 | IQ | S8 и S16 Q11; поддерживаются Stub, HackRF и BladeRF при включённых backend SDK |
 | PSD | Welch, Hann, 50% overlap, удаление комплексного DC в каждом сегменте |
 | FFT | 64–4096 точек; измерение: 512, sweep: 1024 |
+| FFT backend | FFTW3; forward plan повторно используется для сегментов одного PSD |
 | Feature threshold | 8 dB над медианным PSD floor |
 | Signal band | Непрерывная область минимум 2 бина; максимум результата — 16 полос |
 | Числовой floor | -180 dBFS/Hz; если медиана попала в него, применяется ограниченная оценка `peak - 60 dB` |

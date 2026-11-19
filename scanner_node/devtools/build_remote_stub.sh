@@ -18,6 +18,10 @@ if test -z "$compiler"; then
     fi
 fi
 command -v "$compiler" >/dev/null
+command -v pkg-config >/dev/null
+pkg-config --exists fftw3 || { echo 'FFTW3 development files are required.' >&2; exit 1; }
+fftw_cflags=$(pkg-config --cflags fftw3)
+fftw_libs=$(pkg-config --libs fftw3)
 if test "$build_only" -eq 0; then
     command -v python3 >/dev/null
 fi
@@ -36,10 +40,10 @@ for source in src/*.c perf_lib/perf_probe.c perf_lib/perf_probe_hal_host.c; do
     "$compiler" -std=c99 -O0 -Wall -Wextra -Wpedantic -fno-inline -fno-builtin \
         -D_POSIX_C_SOURCE=200809L -DSCANNER_ENABLE_STUB_SDR=1 \
         -DCONFIG_PERF_ENABLE=1 -DCONFIG_PERF_STRINGS=1 -DCONFIG_PERF_LOG_ENABLE=1 \
-        -Iinclude -Iperf_lib -I../cJSON -c "$source" -o "$object"
+        -Iinclude -Iperf_lib -I../cJSON $fftw_cflags -c "$source" -o "$object"
     objects="$objects $object"
 done
-"$compiler" $objects -pthread -lm -o "$candidate"
+"$compiler" $objects -pthread -lm $fftw_libs -o "$candidate"
 
 if test "$build_only" -eq 0; then
     "$compiler" -std=c99 -O0 -Wall -Wextra -Wpedantic -Iinclude -c tests/log_tests.c \
@@ -58,10 +62,10 @@ if test "$build_only" -eq 0; then
             object="build-remote/${name}_${object_name}.o"
             "$compiler" -std=c99 -O0 -Wall -Wextra -Wpedantic -fno-inline -fno-builtin \
                 -D_POSIX_C_SOURCE=200809L -DSCANNER_ENABLE_STUB_SDR=1 \
-                -Iinclude -I../cJSON -c "$source" -o "$object"
+                -Iinclude -I../cJSON $fftw_cflags -c "$source" -o "$object"
             test_objects="$test_objects $object"
         done
-        "$compiler" $test_objects -pthread -lm -o "build-remote/scanner_${name}_tests"
+        "$compiler" $test_objects -pthread -lm $fftw_libs -o "build-remote/scanner_${name}_tests"
         "./build-remote/scanner_${name}_tests"
     done
     python3 tools/logging_e2e_test.py --client "$candidate" --device-json ../device.json

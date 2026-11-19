@@ -5,13 +5,13 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BUILD_DIR=${BUILD_DIR:-"$SCRIPT_DIR/build-pi"}
 
 needs_install=0
-for tool in gcc cmake ninja; do
+for tool in gcc cmake ninja pkg-config; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         needs_install=1
     fi
 done
 
-for header in /usr/include/libbladeRF.h /usr/include/libhackrf/hackrf.h; do
+for header in /usr/include/libbladeRF.h /usr/include/libhackrf/hackrf.h /usr/include/fftw3.h; do
     if [ ! -f "$header" ]; then
         needs_install=1
     fi
@@ -23,7 +23,7 @@ if [ "$needs_install" -eq 1 ]; then
         exit 1
     fi
 
-    packages="build-essential cmake ninja-build pkg-config libusb-1.0-0-dev libbladerf-dev libhackrf-dev"
+    packages="build-essential cmake ninja-build pkg-config libusb-1.0-0-dev libbladerf-dev libhackrf-dev libfftw3-dev"
     if [ "$(id -u)" -eq 0 ]; then
         apt-get update
         apt-get install -y $packages
@@ -44,12 +44,17 @@ for tool in gcc cmake ninja; do
     fi
 done
 
-for header in /usr/include/libbladeRF.h /usr/include/libhackrf/hackrf.h; do
+for header in /usr/include/libbladeRF.h /usr/include/libhackrf/hackrf.h /usr/include/fftw3.h; do
     if [ ! -f "$header" ]; then
         echo "Required SDR development header is still missing: $header" >&2
         exit 1
     fi
 done
+
+if ! pkg-config --exists fftw3; then
+    echo "Required FFTW3 development files are still missing." >&2
+    exit 1
+fi
 
 JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
 cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -G Ninja \
