@@ -73,8 +73,8 @@ int main(void)
                    && packet.size == SCANNER_SESSION_REPLY_SIZE,
                "Client did not receive session response")
         || !check(scanner_udp_receive(&client, 1000, &packet, error, sizeof(error)) == 1
-                       && scanner_decode_ver_request(packet.payload, packet.size, &ver_request_id)
-                       && ver_request_id == UINT32_C(0x1234),
+                      && scanner_decode_ver_request(packet.payload, packet.size, &ver_request_id)
+                      && ver_request_id == UINT32_C(0x1234),
                   "Client did not decode server VER request"))
     {
         goto cleanup;

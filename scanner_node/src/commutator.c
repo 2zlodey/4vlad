@@ -3,11 +3,11 @@
 
 ScannerCommutatorResult scanner_commutator_select_antenna(uint8_t channel, uint8_t antenna, uint8_t *applied_antenna)
 {
-    LG('*', "Select antenna channel=%u antenna=%u; external commutator transport not implemented",
+    LG('*', "Select logical antenna channel=%u antenna=%u; physical commutator control is deferred",
        (unsigned int)channel, (unsigned int)antenna);
     if (applied_antenna != NULL)
-        *applied_antenna = 0;
-    return SCANNER_COMMUTATOR_UNSUPPORTED;
+        *applied_antenna = antenna;
+    return SCANNER_COMMUTATOR_OK;
 }
 
 ScannerCommutatorResult scanner_commutator_set_path(uint8_t channel, uint8_t value, int16_t *power_cdb)

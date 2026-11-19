@@ -277,12 +277,12 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
     struct bladerf *device = (struct bladerf *)frontend->device_handle;
     bladerf_channel_layout layout;
     int result;
-    if (frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S16 || channel_count == 0)
+    if (frontend->iq_sample_format != SCANNER_RADIO_IQ_FORMAT_S16 || channel_count == 0 || channel >= channel_count)
     {
         LG('!', "BladeRF capture failed: invalid sample format or channel count");
         return 0;
     }
-    layout = channel_count > 1 ? BLADERF_RX_X2 : BLADERF_RX_X1;
+    layout = BLADERF_RX_X1;
     if (!ensure_bladerf_capture_buffer(frontend))
         return 0;
     raw = (int16_t *)frontend->capture_buffer;
@@ -291,22 +291,9 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
         LG('!', "BladeRF synchronous RX configuration failed");
         return 0;
     }
-    if (channel_count > 1)
+    if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(channel), true) != 0)
     {
-        if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0
-            || bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), true) != 0)
-        {
-            LG('!', "BladeRF dual-channel RX enable failed");
-            if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), false) != 0)
-                LG('!', "BladeRF RX channel 0 cleanup disable failed");
-            if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(1), false) != 0)
-                LG('!', "BladeRF RX channel 1 cleanup disable failed");
-            return 0;
-        }
-    }
-    else if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(0), true) != 0)
-    {
-        LG('!', "BladeRF RX enable failed");
+        LG('!', "BladeRF RX channel enable failed channel=%u", (unsigned int)channel);
         return 0;
     }
     {
@@ -314,11 +301,8 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
         memset(&metadata, 0, sizeof(metadata));
         result = bladerf_sync_rx(device, raw, complex_pairs, &metadata, timeout_ms);
     }
-    for (pair_index = 0; pair_index < channel_count; ++pair_index)
-    {
-        if (bladerf_enable_module(device, BLADERF_CHANNEL_RX((unsigned int)pair_index), false) != 0)
-            LG('!', "BladeRF RX disable failed channel=%u", (unsigned int)pair_index);
-    }
+    if (bladerf_enable_module(device, BLADERF_CHANNEL_RX(channel), false) != 0)
+        LG('!', "BladeRF RX disable failed channel=%u", (unsigned int)channel);
     if (result != 0)
     {
         LG('!', "BladeRF synchronous RX failed status=%d", result);
@@ -326,7 +310,7 @@ int scanner_radio_capture_bladerf(ScannerRadioFrontend *frontend, uint8_t channe
     }
     for (pair_index = 0; pair_index < complex_pairs; ++pair_index)
     {
-        size_t source_index = (pair_index * channel_count + channel) * 2u;
+        size_t source_index = pair_index * 2u;
         size_t dest_index = pair_index * 4u;
         uint16_t i_value = (uint16_t)raw[source_index];
         uint16_t q_value = (uint16_t)raw[source_index + 1u];

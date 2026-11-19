@@ -33,7 +33,7 @@ def report_process_state(pid):
         print("Scanner task {}: {}".format(task_id, " ".join(values)), file=sys.stderr, flush=True)
 
 
-def validate_iq_recording(path, expected_records):
+def validate_iq_recording(path, expected_records=None):
     with open(path, "rb") as recording:
         data = recording.read()
     if not data.startswith(b"SCIQREC1"):
@@ -56,7 +56,7 @@ def validate_iq_recording(path, expected_records):
         if offset > len(data):
             raise SystemExit("IQ recording contains a truncated sample payload")
         records += 1
-    if records != expected_records:
+    if expected_records is not None and records != expected_records:
         raise SystemExit("IQ recording has {} records, expected {}".format(records, expected_records))
     return records
 
@@ -196,11 +196,14 @@ def main():
             or command_checks.get("sweep_points") != 1
             or not command_checks.get("detector_complete")
             or command_checks.get("detector_detections", 0) < 1
-            or not command_checks.get("detector_iq_recorded")
+            or command_checks.get("detector_antenna_id") != 10
+            or command_checks.get("detector_algorithm_id") != 1
             or not command_checks.get("sdr_reinitialized")
             or "gain_stage_readback_supported" not in command_checks):
         raise SystemExit("radio settings, capture, measurement, or sweep command checks failed")
-    recorded_count = validate_iq_recording(iq_file, len(inventory["frontends"]) * 10)
+    recorded_count = validate_iq_recording(iq_file)
+    if recorded_count <= len(inventory["frontends"]) * 6:
+        raise SystemExit("detector did not append its dwell captures to the IQ recording")
     print(
         "E2E PASS: {} frontend(s); selection starts id={} RX={} TX={} range={}..{} Hz frequency/settings/gain/power/raw-IQ/file-save/sweep/async-CFAR=OK, neutral close=OK raw-IQ={}B records={} IQ={}bit/fmt{} AGC=0x{:02x}".format(
             len(inventory["frontends"]),

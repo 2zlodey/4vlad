@@ -205,15 +205,20 @@
  */
 #define SCANNER_SAVE_IQ_TO_FILE_COMMAND 0x71u
 
-/* Start/poll a bounded asynchronous CFAR scan; one job is active per node. */
+/* Start/poll an asynchronous RF-band scan; algorithm 1 is CA-CFAR. */
 #define SCANNER_DETECT_START_COMMAND 0x72u
 #define SCANNER_DETECT_GET_RESULT_COMMAND 0x73u
-#define SCANNER_DETECT_MAX_FREQUENCIES 128u
-#define SCANNER_DETECT_MAX_AVERAGES 32u
-#define SCANNER_DETECT_START_REQUEST_SIZE 22u
-#define SCANNER_DETECT_START_RESPONSE_SIZE 10u
-#define SCANNER_DETECT_RESULT_REQUEST_SIZE 9u
-#define SCANNER_DETECT_RESULT_RESPONSE_SIZE 46u
+#define SCANNER_DETECT_ALGORITHM_CA_CFAR 1u
+#define SCANNER_DETECT_MAX_WINDOWS 4096u
+#define SCANNER_DETECT_MAX_CANDIDATES 16384u
+#define SCANNER_DETECT_RESULT_PAGE_SIZE 64u
+#define SCANNER_DETECT_START_REQUEST_SIZE 30u
+#define SCANNER_DETECT_START_RESPONSE_SIZE 11u
+#define SCANNER_DETECT_RESULT_REQUEST_SIZE 13u
+#define SCANNER_DETECT_RESULT_HEADER_SIZE 25u
+#define SCANNER_DETECT_CANDIDATE_WIRE_SIZE 16u
+#define SCANNER_DETECT_RESULT_RESPONSE_MAX_SIZE                                                                        \
+    (SCANNER_DETECT_RESULT_HEADER_SIZE + SCANNER_DETECT_RESULT_PAGE_SIZE * SCANNER_DETECT_CANDIDATE_WIRE_SIZE)
 
 typedef enum
 {
@@ -240,6 +245,7 @@ typedef enum
 #define SCANNER_RADIO_STATUS_UNSUPPORTED 8u
 #define SCANNER_RADIO_STATUS_CAPTURE_ERROR 9u
 #define SCANNER_RADIO_STATUS_BUSY 10u
+#define SCANNER_RADIO_STATUS_RESULT_LIMIT 11u
 
 #define SCANNER_RADIO_CAPABILITY_WIRE_SIZE 128u
 #define SCANNER_RADIO_FRONTENDS_RESPONSE_MAX_SIZE                                                                      \
@@ -342,18 +348,32 @@ typedef struct
 {
     uint32_t request_id;
     uint8_t channel;
+    uint8_t antenna_id;
+    uint8_t algorithm_id;
     uint32_t start_khz;
     uint32_t stop_khz;
-    uint32_t step_khz;
+    uint32_t dwell_ms;
     uint16_t fft_size;
-    uint16_t averages;
+    int16_t sensitivity_cdb;
+    uint32_t pfa_ppm;
+    uint8_t training_bins_per_side;
+    uint8_t guard_bins_per_side;
 } ScannerDetectStartRequest;
 
 typedef struct
 {
     uint32_t request_id;
     uint32_t job_id;
+    uint32_t candidate_offset;
 } ScannerDetectResultRequest;
+
+typedef struct
+{
+    uint64_t center_hz;
+    uint32_t bandwidth_hz;
+    int16_t power_cdbfs;
+    int16_t snr_cdb;
+} ScannerDetectCandidate;
 
 void scanner_encode_handshake(uint8_t output[SCANNER_HANDSHAKE_SIZE], const ScannerHandshakeHeader *header,
                               const ScannerDevice *device);
@@ -413,11 +433,11 @@ size_t scanner_encode_sweep_response(uint8_t *output, size_t capacity, uint32_t 
                                      uint8_t channel, uint16_t count, const uint32_t *frequency_khz,
                                      const int16_t *noise_floor_cdbfs);
 size_t scanner_encode_detect_start_response(uint8_t output[SCANNER_DETECT_START_RESPONSE_SIZE], uint32_t request_id,
-                                            uint8_t status, uint32_t job_id);
-size_t scanner_encode_detect_result_response(uint8_t output[SCANNER_DETECT_RESULT_RESPONSE_SIZE],
-                                             uint32_t request_id, uint8_t status, uint32_t job_id,
-                                             uint8_t state, uint16_t progress, uint32_t current_frequency_khz,
-                                             uint16_t detection_count, uint64_t center_hz, uint64_t lower_hz,
-                                             uint64_t upper_hz, int16_t snr_cdbfs, uint8_t iq_recorded);
+                                            uint8_t status, uint32_t job_id, uint8_t antenna_id);
+size_t scanner_encode_detect_result_response(uint8_t *output, size_t output_capacity, uint32_t request_id,
+                                             uint8_t status, uint32_t job_id, uint8_t state, uint16_t progress,
+                                             uint8_t antenna_id, uint8_t algorithm_id, uint32_t total_candidates,
+                                             uint32_t candidate_offset, const ScannerDetectCandidate *candidates,
+                                             uint16_t candidate_count);
 
 #endif

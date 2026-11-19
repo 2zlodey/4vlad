@@ -17,6 +17,8 @@ from tools.demo_server_mock import (  # noqa: E402
     build_radio_frontends_response,
     build_exit_request,
     build_exit_response,
+    build_detect_result_request,
+    build_detect_start_request,
     build_set_active_radio_request,
     build_set_active_radio_response,
     build_set_frequency_request,
@@ -31,6 +33,15 @@ from tools.demo_server_mock import (  # noqa: E402
 
 
 class DemoServerMockTests(unittest.TestCase):
+    def test_detector_requests_use_no_server_step_and_include_algorithm_parameters(self):
+        start = build_detect_start_request(0x12345678, 1, 7, 1, 100000, 109000, 250, 1024, 800, 2000, 16, 3)
+        self.assertEqual(len(start), 30)
+        self.assertEqual(start[4], 0x72)
+        self.assertEqual(struct.unpack_from("<III", start, 8), (100000, 109000, 250))
+        self.assertEqual(struct.unpack_from("<HhI", start, 20), (1024, 800, 2000))
+        self.assertEqual(start[28:], bytes((16, 3)))
+        self.assertEqual(build_detect_result_request(9, 3, 64), struct.pack("<IBII", 9, 0x73, 3, 64))
+
     def test_exit_opcode_matches_original_protocol(self):
         self.assertEqual(build_exit_request(1), b"\x01\x00\x00\x00\xde")
         self.assertEqual(build_exit_response(1), b"\x01\x00\x00\x00\xde\x00")

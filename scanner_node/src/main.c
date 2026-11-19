@@ -33,8 +33,8 @@ static int wait_for_radio_commands(ScannerUdpSocket *socket_handle, const Scanne
                 return 0;
             }
             if (worker_result.size > 0
-                && !scanner_udp_reply(socket_handle, &worker_result.destination,
-                                     worker_result.payload, worker_result.size, error, error_size))
+                && !scanner_udp_reply(socket_handle, &worker_result.destination, worker_result.payload,
+                                      worker_result.size, error, error_size))
                 return 0;
             if (worker_result.close_after_send)
                 return 1;
@@ -153,6 +153,7 @@ static int run_node(const ScannerOptions *options)
     }
     app_context.software_version = options->software_version;
     app_context.analysis_worker = analysis_worker;
+    app_context.device = &device;
     LG('+', "Analysis worker started");
     app_context.iq_file = iq_file;
     if (!scanner_radio_worker_start_with_idle(&radio_worker, &radio_inventory, scanner_radio_command_handle,

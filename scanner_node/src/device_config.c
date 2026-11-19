@@ -51,6 +51,43 @@ static int parse_antenna(const cJSON *item, ScannerAntenna *antenna)
            && read_number(item, "direction", &antenna->direction);
 }
 
+static int antenna_input_exists(const ScannerDevice *device, int32_t input)
+{
+    int index;
+    for (index = 0; index < SCANNER_NODE_ANTENNA_COUNT; ++index)
+        if (device->antennas[index].input == input)
+            return 1;
+    return 0;
+}
+
+static int parse_antenna_routes(const cJSON *item, ScannerDevice *device)
+{
+    int channel;
+    if (item == NULL)
+        return 1;
+    if (!cJSON_IsArray(item) || cJSON_GetArraySize(item) != SCANNER_NODE_MAX_RX_CHANNELS)
+        return 0;
+    for (channel = 0; channel < SCANNER_NODE_MAX_RX_CHANNELS; ++channel)
+    {
+        const cJSON *route = cJSON_GetArrayItem(item, channel);
+        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(route, "mode");
+        if (!cJSON_IsObject(route) || !cJSON_IsString(mode) || mode->valuestring == NULL)
+            return 0;
+        if (strcmp(mode->valuestring, "switched") == 0)
+            device->antenna_routes[channel].mode = SCANNER_ANTENNA_ROUTE_SWITCHED;
+        else if (strcmp(mode->valuestring, "fixed") == 0)
+        {
+            if (!read_int32(route, "antennaInput", &device->antenna_routes[channel].fixed_antenna_input)
+                || !antenna_input_exists(device, device->antenna_routes[channel].fixed_antenna_input))
+                return 0;
+            device->antenna_routes[channel].mode = SCANNER_ANTENNA_ROUTE_FIXED;
+        }
+        else
+            return 0;
+    }
+    return 1;
+}
+
 int device_load_json(const char *filename, ScannerDevice *device, char *error, unsigned long error_size)
 {
     FILE *file;
@@ -60,6 +97,7 @@ int device_load_json(const char *filename, ScannerDevice *device, char *error, u
     cJSON *root;
     const cJSON *coord;
     const cJSON *rfin;
+    const cJSON *antenna_routing;
     ScannerDevice parsed;
     int index;
 
@@ -110,6 +148,10 @@ int device_load_json(const char *filename, ScannerDevice *device, char *error, u
 
     coord = required_item(root, "coord");
     rfin = required_item(root, "rfin");
+    antenna_routing = required_item(root, "antennaRouting");
+    memset(&parsed, 0, sizeof(parsed));
+    for (index = 0; index < SCANNER_NODE_MAX_RX_CHANNELS; ++index)
+        parsed.antenna_routes[index].mode = SCANNER_ANTENNA_ROUTE_SWITCHED;
     if (!cJSON_IsObject(coord) || !cJSON_IsArray(rfin) || cJSON_GetArraySize(rfin) != SCANNER_NODE_ANTENNA_COUNT
         || !read_int32(root, "id", &parsed.id) || !read_number(root, "version", &parsed.version)
         || !read_number(coord, "lon", &parsed.longitude) || !read_number(coord, "lat", &parsed.latitude))
@@ -128,6 +170,12 @@ int device_load_json(const char *filename, ScannerDevice *device, char *error, u
             return 0;
         }
     }
+    if (!parse_antenna_routes(antenna_routing, &parsed))
+    {
+        cJSON_Delete(root);
+        set_error(error, error_size, "Invalid antennaRouting: use two switched/fixed channel routes");
+        return 0;
+    }
     cJSON_Delete(root);
     *device = parsed;
     return 1;
@@ -143,6 +191,7 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
     cJSON *root = NULL;
     cJSON *coord = NULL;
     cJSON *rfin = NULL;
+    cJSON *antenna_routing = NULL;
     char *json_text = NULL;
     FILE *file = NULL;
     int index;
@@ -156,7 +205,8 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
     root = cJSON_CreateObject();
     coord = cJSON_CreateObject();
     rfin = cJSON_CreateArray();
-    if (root == NULL || coord == NULL || rfin == NULL || !add_number(root, "id", device->id)
+    antenna_routing = cJSON_CreateArray();
+    if (root == NULL || coord == NULL || rfin == NULL || antenna_routing == NULL || !add_number(root, "id", device->id)
         || !add_number(root, "version", device->version) || !add_number(coord, "lon", device->longitude)
         || !add_number(coord, "lat", device->latitude))
     {
@@ -167,6 +217,8 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
     coord = NULL;
     cJSON_AddItemToObject(root, "rfin", rfin);
     rfin = NULL;
+    cJSON_AddItemToObject(root, "antennaRouting", antenna_routing);
+    antenna_routing = NULL;
 
     for (index = 0; index < SCANNER_NODE_ANTENNA_COUNT; ++index)
     {
@@ -182,6 +234,21 @@ int device_save_json(const char *filename, const ScannerDevice *device, char *er
             goto cleanup;
         }
         cJSON_AddItemToArray(cJSON_GetObjectItemCaseSensitive(root, "rfin"), item);
+    }
+
+    for (index = 0; index < SCANNER_NODE_MAX_RX_CHANNELS; ++index)
+    {
+        cJSON *route = cJSON_CreateObject();
+        const char *mode = device->antenna_routes[index].mode == SCANNER_ANTENNA_ROUTE_FIXED ? "fixed" : "switched";
+        if (route == NULL || cJSON_AddStringToObject(route, "mode", mode) == NULL
+            || (device->antenna_routes[index].mode == SCANNER_ANTENNA_ROUTE_FIXED
+                && !add_number(route, "antennaInput", device->antenna_routes[index].fixed_antenna_input)))
+        {
+            cJSON_Delete(route);
+            set_error(error, error_size, "Could not encode antenna route");
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(cJSON_GetObjectItemCaseSensitive(root, "antennaRouting"), route);
     }
 
     json_text = cJSON_Print(root);
@@ -216,6 +283,7 @@ cleanup:
 
     free(json_text);
     cJSON_Delete(rfin);
+    cJSON_Delete(antenna_routing);
     cJSON_Delete(coord);
     cJSON_Delete(root);
     return success;

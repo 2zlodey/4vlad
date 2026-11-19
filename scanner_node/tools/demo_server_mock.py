@@ -33,6 +33,8 @@ GET_RAW_IQ_COMMAND = 0x70
 SAVE_IQ_TO_FILE_COMMAND = 0x71
 DETECT_START_COMMAND = 0x72
 DETECT_GET_RESULT_COMMAND = 0x73
+DETECT_ALGORITHM_CA_CFAR = 1
+DETECT_PAGE_SIZE = 64
 RADIO_CAPABILITY_SIZE = 128
 RADIO_MAX_BANDWIDTH_OPTIONS = 16
 RADIO_STATUS_OK = 0
@@ -215,38 +217,41 @@ def build_sweep_request(request_id, channel, start_khz, stop_khz):
     return struct.pack("<IBBII", request_id, SWEEP_COMMAND, channel, start_khz, stop_khz)
 
 
-def build_detect_start_request(request_id, channel, start_khz, stop_khz, step_khz, fft_size, averages):
-    return struct.pack("<IBBIIIHH", request_id, DETECT_START_COMMAND, channel, start_khz, stop_khz,
-                       step_khz, fft_size, averages)
+def build_detect_start_request(request_id, channel, antenna_id, algorithm_id, start_khz, stop_khz, dwell_ms,
+                               fft_size, sensitivity_cdb, pfa_ppm, training_bins, guard_bins):
+    return struct.pack("<IBBBBIIIHhIBB", request_id, DETECT_START_COMMAND, channel, antenna_id, algorithm_id,
+                       start_khz, stop_khz, dwell_ms, fft_size, sensitivity_cdb, pfa_ppm, training_bins, guard_bins)
 
 
-def build_detect_result_request(request_id, job_id):
-    return struct.pack("<IBI", request_id, DETECT_GET_RESULT_COMMAND, job_id)
+def build_detect_result_request(request_id, job_id, candidate_offset=0):
+    return struct.pack("<IBII", request_id, DETECT_GET_RESULT_COMMAND, job_id, candidate_offset)
 
 
 def parse_detect_start_response(payload, expected_id):
-    if len(payload) != 10:
-        raise MockProtocolError("detector START response must have 10 bytes")
-    request_id, command, status, job_id = struct.unpack("<IBBI", payload)
+    if len(payload) != 11:
+        raise MockProtocolError("detector START response must have 11 bytes")
+    request_id, command, status, job_id, antenna_id = struct.unpack("<IBBIB", payload)
     if (request_id, command, status) != (expected_id, DETECT_START_COMMAND, RADIO_STATUS_OK) or job_id == 0:
         raise MockProtocolError("detector START response header or job id is invalid")
-    return job_id
+    return job_id, antenna_id
 
 
-def parse_detect_result_response(payload, expected_id, expected_job_id):
-    if len(payload) != 46:
-        raise MockProtocolError("detector result response must have 46 bytes")
-    values = struct.unpack("<IBBIBHIHQQQhB", payload)
-    (request_id, command, status, job_id, state, progress, current_khz, detections,
-     center_hz, lower_hz, upper_hz, snr_cdbfs, iq_recorded) = values
+def parse_detect_result_response(payload, expected_id, expected_job_id, expected_offset):
+    if len(payload) < 25:
+        raise MockProtocolError("detector result response is shorter than its 25-byte header")
+    values = struct.unpack_from("<IBBIBHBBIIH", payload)
+    (request_id, command, status, job_id, state, progress, antenna_id, algorithm_id,
+     total_candidates, candidate_offset, count) = values
     if (request_id, command, job_id) != (expected_id, DETECT_GET_RESULT_COMMAND, expected_job_id):
         raise MockProtocolError("detector result response request id, command, or job id mismatch")
-    if status != RADIO_STATUS_OK or state not in (1, 2) or progress > 1000 or iq_recorded not in (0, 1):
+    if (status != RADIO_STATUS_OK or state not in (1, 2) or progress > 1000
+            or candidate_offset != expected_offset or count > DETECT_PAGE_SIZE
+            or len(payload) != 25 + count * 12):
         raise MockProtocolError("detector result response status or state is invalid")
-    if detections and not (0 < lower_hz <= center_hz <= upper_hz and snr_cdbfs > 0):
-        raise MockProtocolError("detector candidate frequency or SNR is invalid")
-    return {"state": state, "progress": progress, "current_khz": current_khz,
-            "detections": detections, "iq_recorded": bool(iq_recorded)}
+    candidates = [struct.unpack_from("<Qhh", payload, 25 + index * 12) for index in range(count)]
+    return {"state": state, "progress": progress, "antenna_id": antenna_id,
+            "algorithm_id": algorithm_id, "total_candidates": total_candidates,
+            "candidate_offset": candidate_offset, "candidates": candidates}
 
 
 def build_raw_iq_request(request_id, channel, complex_pairs):
@@ -369,8 +374,9 @@ def exchange_radio_request(sock, endpoint, request):
 
 
 def exercise_commutator_commands(sock, endpoint, request_id):
-    cases = [(command, channel, value, 8) for command in (0xC8, 0xC9)
-              for channel in (0, 1) for value in (0, 255)]
+    cases = [(0xC8, channel, 0, 0) for channel in (0, 1)]
+    cases += [(0xC8, channel, 255, 2) for channel in (0, 1)]
+    cases += [(0xC9, channel, value, 8) for channel in (0, 1) for value in (0, 255)]
     cases += [(command, 2, 0, 5) for command in (0xC8, 0xC9)]
     for command, channel, value, status in cases:
         request_id = next_request_id(request_id)
@@ -497,28 +503,51 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         response, sweep_id, 0, [frequency_khz, frequency_khz + 100], tolerance_khz=1
     )
     detect_start_id = next_request_id(sweep_id)
+    detector_start = build_detect_start_request(
+        detect_start_id, 0, 10, DETECT_ALGORITHM_CA_CFAR, frequency_khz, frequency_khz + 20000,
+        10, 512, 0, 1000, 12, 2,
+    )
     response = exchange_radio_request(
         sock, endpoint,
-        build_detect_start_request(detect_start_id, 0, frequency_khz, frequency_khz + 100, 100000, 512, 2),
+        detector_start,
     )
-    job_id = parse_detect_start_response(response, detect_start_id)
+    job_id, effective_antenna_id = parse_detect_start_response(response, detect_start_id)
+    if effective_antenna_id != 10:
+        raise MockProtocolError("detector START did not select the requested switched antenna")
     busy_start_id = next_request_id(detect_start_id)
     response = exchange_radio_request(
         sock, endpoint,
-        build_detect_start_request(busy_start_id, 0, frequency_khz, frequency_khz, 100000, 512, 1),
+        build_detect_start_request(busy_start_id, 0, 10, DETECT_ALGORITHM_CA_CFAR, frequency_khz, frequency_khz,
+                                   10, 512, 0, 1000, 12, 2),
     )
-    if response != struct.pack("<IBBI", busy_start_id, DETECT_START_COMMAND, 10, 0):
-        raise MockProtocolError("a second detector START was not rejected as busy")
+    if response != struct.pack("<IBBIB", busy_start_id, DETECT_START_COMMAND, 10, 0, 255):
+        raise MockProtocolError("second START response mismatch: got {}".format(response.hex()))
     detect_result = None
     request_cursor = busy_start_id
-    for _ in range(8):
+    for _ in range(2000):
         request_cursor = next_request_id(request_cursor)
-        response = exchange_radio_request(sock, endpoint, build_detect_result_request(request_cursor, job_id))
-        detect_result = parse_detect_result_response(response, request_cursor, job_id)
+        response = exchange_radio_request(sock, endpoint, build_detect_result_request(request_cursor, job_id, 0))
+        detect_result = parse_detect_result_response(response, request_cursor, job_id, 0)
         if detect_result["state"] == 2:
             break
     if detect_result is None or detect_result["state"] != 2 or detect_result["progress"] != 1000:
         raise MockProtocolError("asynchronous detector job did not complete")
+    detector_candidates = list(detect_result["candidates"])
+    while len(detector_candidates) < detect_result["total_candidates"]:
+        request_cursor = next_request_id(request_cursor)
+        offset = len(detector_candidates)
+        response = exchange_radio_request(
+            sock, endpoint, build_detect_result_request(request_cursor, job_id, offset)
+        )
+        page = parse_detect_result_response(response, request_cursor, job_id, offset)
+        detector_candidates.extend(page["candidates"])
+    if (detect_result["antenna_id"] != 10 or detect_result["algorithm_id"] != DETECT_ALGORITHM_CA_CFAR
+            or not detector_candidates):
+        raise MockProtocolError("detector returned no candidates or the wrong antenna/algorithm")
+    for center_hz, power_cdbfs, snr_cdb in detector_candidates:
+        if not (frequency_khz * 1000 <= center_hz <= (frequency_khz + 20000) * 1000
+                and -32768 <= power_cdbfs <= 32767 and snr_cdb >= 0):
+            raise MockProtocolError("candidate frequency, dBFS power, or SNR is out of contract")
     restore_id = next_request_id(request_cursor)
     response = exchange_radio_request(
         sock, endpoint, build_set_frequency_request(restore_id, 0, frequency_khz)
@@ -537,8 +566,9 @@ def exercise_radio_commands(sock, endpoint, request_id, frontend, frequency_khz)
         "frequency_power": True,
         "sweep_points": len(sweep_powers),
         "detector_complete": detect_result["state"] == 2,
-        "detector_detections": detect_result["detections"],
-        "detector_iq_recorded": detect_result["iq_recorded"],
+        "detector_detections": len(detector_candidates),
+        "detector_antenna_id": detect_result["antenna_id"],
+        "detector_algorithm_id": detect_result["algorithm_id"],
     }
 
 

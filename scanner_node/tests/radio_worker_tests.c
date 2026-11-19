@@ -20,7 +20,7 @@ static int echo_request(ScannerRadioWorker *worker, ScannerRadioInventory *inven
     return 1;
 }
 
-static void idle_tick(ScannerRadioWorker *worker, ScannerRadioInventory *inventory, void *context)
+static unsigned int idle_tick(ScannerRadioWorker *worker, ScannerRadioInventory *inventory, void *context)
 {
     int *ticks = (int *)context;
     (void)worker;
@@ -30,6 +30,7 @@ static void idle_tick(ScannerRadioWorker *worker, ScannerRadioInventory *invento
 #else
     (void)__sync_add_and_fetch(ticks, 1);
 #endif
+    return 5u;
 }
 
 static int read_ticks(const int *ticks)

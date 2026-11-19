@@ -36,7 +36,8 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | `0x03` | `MEASURE_FREQUENCY_RANGE` | `channel:u8, start_khz:u32, stop_khz:u32` | `channel:u8, frequency_khz:u32, power_cdbfs:i16` (12 B total) |
 | `0x70` | `GET_RAW_IQ` | `channel:u8, complex_pairs:u16` | `status:u8, channel:u8, format:u8, complex_pairs:u16, IQ bytes[]` |
 | `0x71` | `SAVE_IQ_TO_FILE` | `channel:u8, complex_pairs:u16` | `status:u8, channel:u8, format:u8, complex_pairs:u16, payload_bytes:u32` |
-| `0x72/0x73` | `DETECT_START/DETECT_GET_RESULT` | bounded scan parameters / `job_id:u32` | job ID / asynchronous CFAR scan state and candidate |
+| `0x72` | `DETECT_START` | `channel:u8, antenna_id:u8, algorithm_id:u8, start/stop_khz:u32, dwell_ms:u32, algorithm params` | `status:u8, job_id:u32, effective_antenna_id:u8` |
+| `0x73` | `DETECT_GET_RESULT` | `job_id:u32, candidate_offset:u32` | job state/progress and up to 64 `{center_hz:u64, bandwidth_hz:u32, power_cdbfs:i16, snr_cdb:i16}` candidates |
 | `0xDE` | `EXIT` | none | `status:u8` |
 | `0x69` | `REINITIALIZE_SDR` | none | `status:u8` |
 | `0xC8` | `SELECT_ANTENNA` | `board_channel:u8, antenna:u8` | `status:u8, board_channel:u8, applied_antenna:u8` |
@@ -59,6 +60,7 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | `8` | Unsupported operation |
 | `9` | Capture failed |
 | `10` | Detector job already running |
+| `11` | Detector candidate capacity reached; returned pages are partial |
 
 `SET_ACTIVE_RADIO` also uses `2` when the frontend ID is absent. `active_id=0xff` means no frontend selected.
 
@@ -68,9 +70,12 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | --- | --- |
 | RX channel | Zero-based; supported channels are `0` and `1`. |
 | Reinitialize (`0x69`) | Closes/reopens the active backend and clears cached settings. Returns `4` with no active radio, `7` on reopen failure. |
-| Commutator (`0xC8/0xC9`) | Placeholder only; logs requests and returns `8`. No hardware operation is performed. |
+| Antenna/gain path (`0xC8/0xC9`) | `0xC8` validates the logical antenna ID and acknowledges it; physical switching is deferred. `0xC9` remains a placeholder returning `8`. |
 | Gain | Total gain is signed centi-dB. Gain-stage values are signed dB; BladeRF reports total RX gain in LNA and `0` in VGA. |
 | DSP | Welch PSD, Hann window, 50% overlap; FFT sizes 64-4096. Measurement uses 1024 samples; sweep uses 4096. |
+| Detector | `0x72/0x73`, internal overlapped RF windows, algorithm 1 CA-CFAR, all candidates retrieved using offsets. See `DETECTION.md` for wire layouts and parameters. |
+| BladeRF detector capture | Uses `BLADERF_RX_X1` for the selected channel only. Either RX channel can use its advertised 61.44 Msps maximum independently; analog BW max is 56 MHz. |
+| Antenna routing | `rfin[].in` is the antenna ID. Optional `antennaRouting` configures each of two RX channels as `switched` or `fixed`. Physical switch control is deferred; logical selection is acknowledged. Units for `rfin[].from/to` remain unspecified and are not used to reject RF ranges. |
 | IQ | Maximum 4096 complex pairs. Format `1`: signed 8-bit I/Q. Format `2`: signed 16-bit little-endian I/Q. |
 
 ## Logging

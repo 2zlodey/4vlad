@@ -197,7 +197,203 @@ static int prepare_standard_rx(ScannerRadioInventory *inventory, uint8_t channel
     return 1;
 }
 
-void scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory, void *context)
+static const ScannerAntenna *find_antenna(const ScannerDevice *device, int32_t antenna_input)
+{
+    size_t index;
+    if (device == NULL)
+        return NULL;
+    for (index = 0; index < SCANNER_NODE_ANTENNA_COUNT; ++index)
+        if (device->antennas[index].input == antenna_input)
+            return &device->antennas[index];
+    return NULL;
+}
+
+static int resolve_detector_antenna(const ScannerDevice *device, uint8_t channel, uint8_t requested_id,
+                                    uint8_t *effective_id, const ScannerAntenna **antenna)
+{
+    const ScannerAntenna *selected;
+    if (device == NULL || channel >= SCANNER_NODE_MAX_RX_CHANNELS || effective_id == NULL || antenna == NULL)
+        return 0;
+    selected = find_antenna(device, requested_id);
+    if (selected == NULL)
+        return 0;
+    if (device->antenna_routes[channel].mode == SCANNER_ANTENNA_ROUTE_FIXED)
+    {
+        selected = find_antenna(device, device->antenna_routes[channel].fixed_antenna_input);
+        if (selected == NULL)
+            return 0;
+    }
+    *effective_id = (uint8_t)selected->input;
+    *antenna = selected;
+    return 1;
+}
+
+static uint32_t quantize_rate_up(const ScannerRadioFrontend *frontend, uint64_t desired_hz)
+{
+    uint64_t value = desired_hz;
+    if (value < frontend->sample_rate_min_hz)
+        value = frontend->sample_rate_min_hz;
+    if (value > frontend->sample_rate_max_hz)
+        value = frontend->sample_rate_max_hz;
+    if (frontend->sample_rate_step_hz > 0)
+    {
+        uint64_t delta = value - frontend->sample_rate_min_hz;
+        uint64_t steps = (delta + frontend->sample_rate_step_hz - 1u) / frontend->sample_rate_step_hz;
+        value = frontend->sample_rate_min_hz + steps * frontend->sample_rate_step_hz;
+        if (value > frontend->sample_rate_max_hz)
+            value = frontend->sample_rate_max_hz;
+    }
+    return (uint32_t)value;
+}
+
+static int choose_detector_bandwidth(const ScannerRadioFrontend *frontend, uint32_t desired_hz, uint32_t rate_limit_hz,
+                                     uint32_t *selected_hz)
+{
+    uint32_t upper = frontend->bandwidth_max_hz < rate_limit_hz ? frontend->bandwidth_max_hz : rate_limit_hz;
+    if (selected_hz == NULL || upper < frontend->bandwidth_min_hz)
+        return 0;
+    if (frontend->bandwidth_option_count > 0)
+    {
+        size_t index;
+        uint32_t smallest = UINT32_MAX;
+        uint32_t largest = 0;
+        for (index = 0; index < frontend->bandwidth_option_count; ++index)
+        {
+            uint32_t option = frontend->bandwidth_options[index];
+            if (option < frontend->bandwidth_min_hz || option > upper)
+                continue;
+            if (option > largest)
+                largest = option;
+            if (option >= desired_hz && option < smallest)
+                smallest = option;
+        }
+        *selected_hz = smallest != UINT32_MAX ? smallest : largest;
+        return *selected_hz != 0;
+    }
+    {
+        uint64_t selected = desired_hz;
+        if (selected < frontend->bandwidth_min_hz)
+            selected = frontend->bandwidth_min_hz;
+        if (selected > upper)
+            selected = upper;
+        if (frontend->bandwidth_step_hz > 0 && selected < upper)
+        {
+            uint64_t delta = selected - frontend->bandwidth_min_hz;
+            uint64_t steps = (delta + frontend->bandwidth_step_hz - 1u) / frontend->bandwidth_step_hz;
+            selected = frontend->bandwidth_min_hz + steps * frontend->bandwidth_step_hz;
+            if (selected > upper)
+                selected = upper;
+        }
+        *selected_hz = (uint32_t)selected;
+        return 1;
+    }
+}
+
+static int configure_detector_capture(ScannerRadioInventory *inventory, uint8_t channel, uint64_t requested_width_hz,
+                                      uint32_t *sample_rate_hz, uint32_t *bandwidth_hz, uint64_t *usable_width_hz)
+{
+    const ScannerRadioFrontend *frontend = scanner_radio_active(inventory);
+    uint64_t desired_width = requested_width_hz + requested_width_hz / 10u;
+    uint64_t rate_target_hz;
+    uint32_t rate_limit_hz;
+    uint32_t selected_bandwidth;
+    uint32_t selected_rate;
+    uint32_t actual_rate;
+    uint32_t actual_bandwidth;
+    if (frontend == NULL || sample_rate_hz == NULL || bandwidth_hz == NULL || usable_width_hz == NULL)
+        return 0;
+    rate_limit_hz = frontend->sample_rate_max_hz;
+    rate_target_hz = desired_width > rate_limit_hz ? rate_limit_hz : desired_width;
+    if (desired_width > frontend->bandwidth_max_hz)
+        desired_width = frontend->bandwidth_max_hz;
+    if (!choose_detector_bandwidth(frontend, (uint32_t)desired_width, rate_limit_hz,
+                                   &selected_bandwidth))
+        return 0;
+    selected_rate = quantize_rate_up(frontend, rate_target_hz);
+    if (!scanner_radio_set_sample_rate(inventory, channel, selected_rate, &actual_rate)
+        || !choose_detector_bandwidth(frontend, selected_bandwidth, actual_rate, &selected_bandwidth)
+        || !scanner_radio_set_bandwidth(inventory, channel, selected_bandwidth, &actual_bandwidth))
+        return 0;
+    *sample_rate_hz = actual_rate;
+    *bandwidth_hz = actual_bandwidth;
+    *usable_width_hz = (actual_rate < actual_bandwidth ? actual_rate : actual_bandwidth) * 9u / 10u;
+     LG('*', "Detector capture plan channel=%u mode=single-RX sample-rate=%u Hz BW=%u Hz usable=%llu Hz max-rate=%u Hz",
+       (unsigned int)channel, (unsigned int)actual_rate, (unsigned int)actual_bandwidth,
+         (unsigned long long)*usable_width_hz, (unsigned int)frontend->sample_rate_max_hz);
+    return *usable_width_hz > 0;
+}
+
+static uint64_t detector_window_center_hz(const ScannerDetectorJob *job)
+{
+    uint64_t requested_span = job->stop_hz - job->start_hz;
+    uint64_t covered_span = job->capture_width_hz;
+    uint64_t remaining;
+    if (job->window_count <= 1u || requested_span <= covered_span)
+        return job->start_hz + requested_span / 2u;
+    remaining = requested_span - covered_span;
+    return job->start_hz + covered_span / 2u + remaining * job->window_index / (job->window_count - 1u);
+}
+
+static int16_t detector_db_to_cdb(double db)
+{
+    double value = db * 100.0;
+    if (value > INT16_MAX)
+        value = INT16_MAX;
+    if (value < INT16_MIN)
+        value = INT16_MIN;
+    return (int16_t)lrint(value);
+}
+
+static void detector_add_candidate(ScannerDetectorJob *job, uint64_t lower_hz, uint64_t upper_hz, uint64_t center_hz,
+                                   double power_dbfs, double snr_db, uint64_t bin_width_hz)
+{
+    size_t index;
+    uint64_t tolerance = bin_width_hz * 2u;
+    if (tolerance < 1000u)
+        tolerance = 1000u;
+    for (index = 0; index < job->candidate_count; ++index)
+    {
+        ScannerDetectCandidate *candidate = &job->candidates[index].wire;
+        uint64_t expanded_lower = job->candidates[index].lower_hz > tolerance
+                                      ? job->candidates[index].lower_hz - tolerance
+                                      : 0u;
+        uint64_t expanded_upper = job->candidates[index].upper_hz + tolerance;
+        if (lower_hz <= expanded_upper && upper_hz >= expanded_lower)
+        {
+            if (power_dbfs > candidate->power_cdbfs / 100.0)
+            {
+                candidate->center_hz = center_hz;
+                candidate->power_cdbfs = detector_db_to_cdb(power_dbfs);
+                candidate->snr_cdb = detector_db_to_cdb(snr_db);
+            }
+            if (lower_hz < job->candidates[index].lower_hz)
+                job->candidates[index].lower_hz = lower_hz;
+            if (upper_hz > job->candidates[index].upper_hz)
+                job->candidates[index].upper_hz = upper_hz;
+            {
+                uint64_t merged_width = job->candidates[index].upper_hz - job->candidates[index].lower_hz;
+                candidate->bandwidth_hz = merged_width > UINT32_MAX ? UINT32_MAX : (uint32_t)merged_width;
+            }
+            return;
+        }
+    }
+    if (job->candidate_count >= SCANNER_DETECT_MAX_CANDIDATES)
+    {
+        job->failure_status = SCANNER_RADIO_STATUS_RESULT_LIMIT;
+        job->state = SCANNER_DETECT_STATE_FAILED;
+        return;
+    }
+    job->candidates[job->candidate_count].wire.center_hz = center_hz;
+    job->candidates[job->candidate_count].wire.bandwidth_hz =
+        upper_hz - lower_hz > UINT32_MAX ? UINT32_MAX : (uint32_t)(upper_hz - lower_hz);
+    job->candidates[job->candidate_count].wire.power_cdbfs = detector_db_to_cdb(power_dbfs);
+    job->candidates[job->candidate_count].wire.snr_cdb = detector_db_to_cdb(snr_db);
+    job->candidates[job->candidate_count].lower_hz = lower_hz;
+    job->candidates[job->candidate_count].upper_hz = upper_hz;
+    job->candidate_count++;
+}
+
+unsigned int scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory, void *context)
 {
     ScannerRadioCommandContext *app = (ScannerRadioCommandContext *)context;
     ScannerDetectorJob *job;
@@ -213,35 +409,39 @@ void scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInvento
     size_t bin_count = 0;
     size_t index;
     uint32_t bandwidth_hz;
+    uint64_t center_hz;
     (void)worker;
     if (app == NULL || inventory == NULL)
-        return;
+        return 100u;
     job = &app->detector_job;
     if (job->state != SCANNER_DETECT_STATE_RUNNING)
-        return;
+        return 100u;
 
     frontend = scanner_radio_active(inventory);
-    if (frontend == NULL || job->channel >= frontend->rx_channels
-        || frontend->id != job->frontend_id
+    if (frontend == NULL || job->channel >= frontend->rx_channels || frontend->id != job->frontend_id
         || scanner_radio_get_sample_rate(inventory, job->channel, &sample_rate_hz) != 1
         || scanner_radio_get_bandwidth(inventory, job->channel, &bandwidth_hz) != 1
         || sample_rate_hz != job->sample_rate_hz || bandwidth_hz != job->bandwidth_hz)
     {
         job->state = SCANNER_DETECT_STATE_FAILED;
-        return;
+        job->failure_status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        return 100u;
     }
-    if (!scanner_radio_set_frequency_no_readback(inventory, job->channel, (uint64_t)job->current_khz * 1000u))
+    center_hz = detector_window_center_hz(job);
+    if (!scanner_radio_set_frequency_no_readback(inventory, job->channel, center_hz))
     {
         job->state = SCANNER_DETECT_STATE_FAILED;
-        return;
+        job->failure_status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+        return 100u;
     }
-    if (job->average_index == 0)
+    if (job->frame_index == 0)
         memset(job->psd_linear_sum, 0, sizeof(job->psd_linear_sum));
-    capture_pairs = (uint16_t)(job->fft_size * 2u);
+    capture_pairs = job->capture_pairs_per_frame;
     if (!capture_and_record(app, inventory, job->channel, capture_pairs, iq, sizeof(iq), &iq_size, &radio_format))
     {
         job->state = SCANNER_DETECT_STATE_FAILED;
-        return;
+        job->failure_status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        return 100u;
     }
     if (radio_format == SCANNER_RADIO_IQ_FORMAT_S8)
         dsp_format = SCANNER_DSP_IQ_FORMAT_S8;
@@ -250,26 +450,30 @@ void scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInvento
     else
     {
         job->state = SCANNER_DETECT_STATE_FAILED;
-        return;
+        job->failure_status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        return 100u;
     }
     if (!scanner_dsp_welch_psd_dbfs_hz(iq, iq_size, capture_pairs, dsp_format, sample_rate_hz, job->fft_size, psd,
                                        SCANNER_DSP_MAX_FFT_SIZE, &bin_count))
     {
         job->state = SCANNER_DETECT_STATE_FAILED;
-        return;
+        job->failure_status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+        return 100u;
     }
     for (index = 0; index < bin_count; ++index)
         job->psd_linear_sum[index] += pow(10.0, psd[index] / 10.0);
 
-    job->average_index++;
-    if (job->average_index >= job->averages)
+    job->frame_index++;
+    if (job->frame_index >= job->frames_per_window)
     {
         for (index = 0; index < bin_count; ++index)
-            psd[index] = 10.0 * log10(fmax(job->psd_linear_sum[index] / job->averages, 1e-300));
-        if (!scanner_dsp_cfar_detect(psd, bin_count, 12u, 2u, 1e-3, active_bins, SCANNER_DSP_MAX_FFT_SIZE))
+            psd[index] = 10.0 * log10(fmax(job->psd_linear_sum[index] / job->frames_per_window, 1e-300));
+        if (!scanner_dsp_cfar_detect(psd, bin_count, job->training_bins_per_side, job->guard_bins_per_side,
+                                     (double)job->pfa_ppm / 1000000.0, active_bins, SCANNER_DSP_MAX_FFT_SIZE))
         {
             job->state = SCANNER_DETECT_STATE_FAILED;
-            return;
+            job->failure_status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+            return 100u;
         }
         for (index = 0; index < bin_count;)
         {
@@ -280,9 +484,16 @@ void scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInvento
             double lower_offset;
             double upper_offset;
             double center_offset;
+            double signal_power = 0.0;
+            double noise_density = 0.0;
+            double candidate_width_hz;
+            double power_dbfs;
+            double absolute_lower_hz;
+            double absolute_upper_hz;
+            double absolute_center_hz;
             uint64_t lower_hz;
             uint64_t upper_hz;
-            uint64_t center_hz;
+            uint64_t candidate_center_hz;
             while (index < bin_count && !active_bins[index])
                 index++;
             if (index == bin_count)
@@ -298,68 +509,66 @@ void scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadioInvento
             end = index;
             if (end - start < 2u)
                 continue;
-            snr_db = psd[peak_bin];
+            for (size_t signal_bin = start; signal_bin < end; ++signal_bin)
+                signal_power += pow(10.0, psd[signal_bin] / 10.0) * sample_rate_hz / bin_count;
             {
-                size_t neighbor_start = peak_bin >= 14u ? peak_bin - 14u : 0u;
-                size_t neighbor_end = peak_bin + 14u < bin_count ? peak_bin + 14u : bin_count - 1u;
-                double noise_power = 0.0;
+                size_t training_span = job->training_bins_per_side + job->guard_bins_per_side + 4u;
+                size_t neighbor_start = peak_bin > training_span ? peak_bin - training_span : 0u;
+                size_t neighbor_end = peak_bin + training_span < bin_count ? peak_bin + training_span : bin_count - 1u;
                 size_t noise_count = 0;
                 size_t neighbor;
                 for (neighbor = neighbor_start; neighbor <= neighbor_end; ++neighbor)
                 {
-                    if (neighbor + 2u < start || neighbor > end + 1u)
+                    if (neighbor + job->guard_bins_per_side < start || neighbor > end + job->guard_bins_per_side)
                     {
-                        noise_power += pow(10.0, psd[neighbor] / 10.0);
+                        noise_density += pow(10.0, psd[neighbor] / 10.0);
                         noise_count++;
                     }
                 }
-                if (noise_count > 0 && noise_power > 0.0)
-                    snr_db -= 10.0 * log10(noise_power / noise_count);
+                if (noise_count > 0)
+                    noise_density /= noise_count;
             }
+            candidate_width_hz = (double)(end - start) * sample_rate_hz / bin_count;
+            if (signal_power <= 0.0 || noise_density <= 0.0 || candidate_width_hz <= 0.0)
+                continue;
+            power_dbfs = 10.0 * log10(signal_power);
+            snr_db = 10.0 * log10(signal_power / (noise_density * candidate_width_hz));
+            if (snr_db * 100.0 < job->sensitivity_cdb)
+                continue;
             lower_offset = ((double)start - (double)bin_count / 2.0) * sample_rate_hz / bin_count;
             upper_offset = ((double)end - (double)bin_count / 2.0) * sample_rate_hz / bin_count;
             center_offset = (lower_offset + upper_offset) * 0.5;
-            lower_hz = (uint64_t)fmax(0.0, (double)job->current_khz * 1000.0 + lower_offset);
-            upper_hz = (uint64_t)fmax(0.0, (double)job->current_khz * 1000.0 + upper_offset);
-            center_hz = (uint64_t)fmax(0.0, (double)job->current_khz * 1000.0 + center_offset);
-            if (job->detection_count < UINT16_MAX)
-                job->detection_count++;
-            if (app->iq_file != NULL)
-                job->iq_recorded = 1;
-            if (snr_db * 100.0 > job->best_snr_cdbfs)
-            {
-                double snr_cdb = snr_db * 100.0;
-                if (snr_cdb > INT16_MAX)
-                    snr_cdb = INT16_MAX;
-                if (snr_cdb < INT16_MIN)
-                    snr_cdb = INT16_MIN;
-                job->best_snr_cdbfs = (int16_t)snr_cdb;
-                job->best_center_hz = center_hz;
-                job->best_lower_hz = lower_hz;
-                job->best_upper_hz = upper_hz;
-            }
+            absolute_lower_hz = (double)center_hz + lower_offset;
+            absolute_upper_hz = (double)center_hz + upper_offset;
+            absolute_center_hz = (double)center_hz + center_offset;
+            if (absolute_upper_hz <= (double)job->start_hz || absolute_lower_hz >= (double)job->stop_hz)
+                continue;
+            lower_hz = (uint64_t)fmin((double)job->stop_hz,
+                                      fmax((double)job->start_hz, absolute_lower_hz));
+            upper_hz = (uint64_t)fmin((double)job->stop_hz,
+                                      fmax((double)job->start_hz, absolute_upper_hz));
+            candidate_center_hz = (uint64_t)fmin((double)job->stop_hz,
+                                                  fmax((double)job->start_hz, absolute_center_hz));
+            if (upper_hz > lower_hz)
+                detector_add_candidate(job, lower_hz, upper_hz, candidate_center_hz, power_dbfs, snr_db,
+                                       sample_rate_hz / bin_count);
+            if (job->state == SCANNER_DETECT_STATE_FAILED)
+                return 100u;
         }
+        job->frame_index = 0;
+        job->window_index++;
     }
 
     {
-        uint32_t done = (uint32_t)job->frequency_index * job->averages + job->average_index;
-        uint32_t total = (uint32_t)job->frequency_count * job->averages;
+        uint64_t done = (uint64_t)job->window_index * job->frames_per_window + job->frame_index;
+        uint64_t total = (uint64_t)job->window_count * job->frames_per_window;
         job->progress = total == 0 ? 1000u : (uint16_t)(done * 1000u / total);
     }
-    if (job->average_index >= job->averages)
-    {
-        job->average_index = 0;
-        if (job->current_khz == job->stop_khz)
-            job->state = SCANNER_DETECT_STATE_COMPLETE;
-        else
-        {
-            uint64_t next_khz = (uint64_t)job->current_khz + job->step_khz;
-            job->current_khz = next_khz < job->stop_khz ? (uint32_t)next_khz : job->stop_khz;
-            job->frequency_index++;
-        }
-    }
+    if (job->window_index >= job->window_count)
+        job->state = SCANNER_DETECT_STATE_COMPLETE;
     if (job->state == SCANNER_DETECT_STATE_COMPLETE)
         job->progress = 1000u;
+    return job->state == SCANNER_DETECT_STATE_RUNNING ? 2u : 100u;
 }
 
 int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
@@ -412,8 +621,15 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         ScannerCommutatorResult result;
         if (commutator_request.channel > 1)
             status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+        else if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND
+                 && find_antenna(app == NULL ? NULL : app->device, commutator_request.value) == NULL)
+            status = SCANNER_RADIO_STATUS_NOT_FOUND;
         else
         {
+            uint8_t selected_antenna = commutator_request.value;
+            if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND && app != NULL && app->device != NULL
+                && app->device->antenna_routes[commutator_request.channel].mode == SCANNER_ANTENNA_ROUTE_FIXED)
+                selected_antenna = (uint8_t)app->device->antenna_routes[commutator_request.channel].fixed_antenna_input;
             if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND)
                 result = scanner_commutator_select_antenna(commutator_request.channel, commutator_request.value,
                                                            &applied_antenna);
@@ -422,6 +638,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             status = result == SCANNER_COMMUTATOR_OK            ? SCANNER_RADIO_STATUS_OK
                      : result == SCANNER_COMMUTATOR_UNSUPPORTED ? SCANNER_RADIO_STATUS_UNSUPPORTED
                                                                 : SCANNER_RADIO_STATUS_HARDWARE_ERROR;
+            if (commutator_request.command == SCANNER_SELECT_ANTENNA_COMMAND && status == SCANNER_RADIO_STATUS_OK)
+                applied_antenna = selected_antenna;
         }
         response_size = scanner_encode_commutator_response(response, &commutator_request, status, applied_antenna,
                                                            power_cdb);
@@ -725,16 +943,29 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
         {
             uint8_t status = SCANNER_RADIO_STATUS_OK;
             uint32_t job_id = 0;
-            uint64_t frequency_count;
-            ScannerDetectorJob new_job;
+            uint8_t effective_antenna_id = SCANNER_RADIO_ID_NONE;
+            uint64_t usable_width_hz = 0;
+            uint64_t span_hz;
+            uint64_t window_count;
+            uint64_t target_samples;
+            uint64_t samples_per_window;
+            uint32_t detector_sample_rate_hz = 0;
+            uint32_t detector_bandwidth_hz = 0;
+            const ScannerAntenna *antenna = NULL;
+            ScannerDetectorJob *job = app == NULL ? NULL : &app->detector_job;
             active_frontend = scanner_radio_active(inventory);
             if (app == NULL)
                 status = SCANNER_RADIO_STATUS_NOT_CONFIGURED;
-            else if (app->detector_job.state == SCANNER_DETECT_STATE_RUNNING)
+            else if (job->state == SCANNER_DETECT_STATE_RUNNING)
                 status = SCANNER_RADIO_STATUS_BUSY;
+            else if (detect_request.algorithm_id != SCANNER_DETECT_ALGORITHM_CA_CFAR)
+                status = SCANNER_RADIO_STATUS_UNSUPPORTED;
             else if (active_frontend != NULL && active_frontend->device_handle != NULL
                      && detect_request.channel >= active_frontend->rx_channels)
                 status = SCANNER_RADIO_STATUS_INVALID_CHANNEL;
+            else if (!resolve_detector_antenna(app->device, detect_request.channel, detect_request.antenna_id,
+                                               &effective_antenna_id, &antenna))
+                status = SCANNER_RADIO_STATUS_NOT_FOUND;
             else if (!prepare_standard_rx(inventory, detect_request.channel))
                 status = SCANNER_RADIO_STATUS_NO_ACTIVE_FRONTEND;
             active_frontend = scanner_radio_active(inventory);
@@ -745,40 +976,72 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                 && ((uint64_t)detect_request.start_khz * 1000u < active_frontend->frequency_min_hz
                     || (uint64_t)detect_request.stop_khz * 1000u > active_frontend->frequency_max_hz))
                 status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+            span_hz = (uint64_t)(detect_request.stop_khz - detect_request.start_khz) * 1000u;
             if (status == SCANNER_RADIO_STATUS_OK)
             {
-                frequency_count = ((uint64_t)detect_request.stop_khz - detect_request.start_khz
-                                   + detect_request.step_khz - 1u)
-                                  / detect_request.step_khz
-                                  + 1u;
-                memset(&new_job, 0, sizeof(new_job));
-                new_job.next_job_id = app->detector_job.next_job_id + 1u;
-                if (new_job.next_job_id == 0)
-                    new_job.next_job_id = 1u;
-                new_job.job_id = new_job.next_job_id;
-                new_job.channel = detect_request.channel;
-                new_job.frontend_id = active_frontend->id;
-                new_job.start_khz = detect_request.start_khz;
-                new_job.stop_khz = detect_request.stop_khz;
-                new_job.step_khz = detect_request.step_khz;
-                new_job.current_khz = detect_request.start_khz;
-                new_job.fft_size = detect_request.fft_size;
-                new_job.averages = detect_request.averages;
-                new_job.frequency_count = (uint16_t)frequency_count;
-                new_job.sample_rate_hz = active_frontend->configured_sample_rate_hz;
-                new_job.bandwidth_hz = active_frontend->configured_bandwidth_hz;
-                new_job.best_snr_cdbfs = INT16_MIN;
-                new_job.state = SCANNER_DETECT_STATE_RUNNING;
-                app->detector_job = new_job;
-                job_id = new_job.job_id;
+                if (!configure_detector_capture(inventory, detect_request.channel, span_hz, &detector_sample_rate_hz,
+                                                &detector_bandwidth_hz, &usable_width_hz))
+                    status = SCANNER_RADIO_STATUS_HARDWARE_ERROR;
             }
-            response_size = scanner_encode_detect_start_response(response, detect_request.request_id, status, job_id);
+            if (status == SCANNER_RADIO_STATUS_OK)
+            {
+                uint64_t hop_hz = usable_width_hz * 8u / 10u;
+                uint32_t next_job_id = job->next_job_id + 1u;
+                if (next_job_id == 0)
+                    next_job_id = 1u;
+                window_count = span_hz <= usable_width_hz ? 1u
+                               : hop_hz == 0              ? UINT64_MAX
+                                                          : (span_hz - usable_width_hz + hop_hz - 1u) / hop_hz + 1u;
+                if (window_count > SCANNER_DETECT_INTERNAL_MAX_WINDOWS)
+                    status = SCANNER_RADIO_STATUS_OUT_OF_RANGE;
+                else
+                {
+                    target_samples = (uint64_t)detect_request.dwell_ms * detector_sample_rate_hz / 1000u;
+                    samples_per_window = (target_samples + window_count - 1u) / window_count;
+                    memset(job, 0, sizeof(*job));
+                    job->next_job_id = next_job_id;
+                    job->job_id = next_job_id;
+                    job->channel = detect_request.channel;
+                    job->frontend_id = active_frontend->id;
+                    job->antenna_id = effective_antenna_id;
+                    job->algorithm_id = detect_request.algorithm_id;
+                    job->sample_rate_hz = detector_sample_rate_hz;
+                    job->bandwidth_hz = detector_bandwidth_hz;
+                    job->start_hz = (uint64_t)detect_request.start_khz * 1000u;
+                    job->stop_hz = (uint64_t)detect_request.stop_khz * 1000u;
+                    job->capture_width_hz = usable_width_hz;
+                    job->hop_hz = hop_hz;
+                    job->fft_size = detect_request.fft_size;
+                    job->capture_pairs_per_frame = SCANNER_RADIO_MAX_CAPTURE_IQ_PAIRS;
+                    job->dwell_ms = detect_request.dwell_ms;
+                    job->sensitivity_cdb = detect_request.sensitivity_cdb;
+                    job->pfa_ppm = detect_request.pfa_ppm;
+                    job->training_bins_per_side = detect_request.training_bins_per_side;
+                    job->guard_bins_per_side = detect_request.guard_bins_per_side;
+                    job->window_count = (uint32_t)window_count;
+                    job->frames_per_window = (uint32_t)((samples_per_window + job->capture_pairs_per_frame - 1u)
+                                                        / job->capture_pairs_per_frame);
+                    if (job->frames_per_window == 0)
+                        job->frames_per_window = 1u;
+                    job->state = SCANNER_DETECT_STATE_RUNNING;
+                    job_id = job->job_id;
+                }
+            }
+            response_size = scanner_encode_detect_start_response(response, detect_request.request_id, status, job_id,
+                                                                 effective_antenna_id);
             if (!store_worker_response(worker_result, response, response_size))
                 return 0;
             LG(status == SCANNER_RADIO_STATUS_OK ? '+' : '!',
-               "Detector start id=%" PRIu32 " job=%" PRIu32 " range=%u..%u step=%u kHz status=%u",
-               detect_request.request_id, job_id, detect_request.start_khz, detect_request.stop_khz,
-               detect_request.step_khz, (unsigned int)status);
+               "Detector start id=%" PRIu32 " job=%" PRIu32
+               " channel=%u antenna=%u algorithm=%u range=%u..%u kHz "
+               "dwell=%u ms windows=%u status=%u",
+               detect_request.request_id, job_id, detect_request.channel, effective_antenna_id,
+               detect_request.algorithm_id, detect_request.start_khz, detect_request.stop_khz, detect_request.dwell_ms,
+               status == SCANNER_RADIO_STATUS_OK ? job->window_count : 0u, (unsigned int)status);
+            if (status == SCANNER_RADIO_STATUS_OK && antenna != NULL)
+                LG('*', "Antenna table input=%d type=%d gain=%d dBi from=%d to=%d polar=%.1f direction=%.1f",
+                   (int)antenna->input, (int)antenna->type, (int)antenna->dbi, (int)antenna->from,
+                   (int)antenna->to, antenna->polar, antenna->direction);
             return 1;
         }
     }
@@ -791,32 +1054,44 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
             uint8_t status = SCANNER_RADIO_STATUS_OK;
             uint8_t state = SCANNER_DETECT_STATE_IDLE;
             uint16_t progress = 0;
-            uint32_t current_khz = 0;
-            uint16_t detections = 0;
-            uint64_t center_hz = 0;
-            uint64_t lower_hz = 0;
-            uint64_t upper_hz = 0;
-            int16_t snr_cdbfs = 0;
-            uint8_t iq_recorded = 0;
+            uint8_t antenna_id = 0;
+            uint8_t algorithm_id = 0;
+            uint32_t total_candidates = 0;
+            uint32_t candidate_offset = detect_request.candidate_offset;
+            uint16_t candidate_count = 0;
+            ScannerDetectCandidate page[SCANNER_DETECT_RESULT_PAGE_SIZE];
+            const ScannerDetectCandidate *candidates = page;
+            uint32_t remaining;
+            uint16_t page_index;
             if (job == NULL || job->job_id != detect_request.job_id)
                 status = SCANNER_RADIO_STATUS_NOT_FOUND;
             else
             {
                 state = job->state;
                 progress = job->progress;
-                current_khz = job->current_khz;
-                detections = job->detection_count;
-                center_hz = job->best_center_hz;
-                lower_hz = job->best_lower_hz;
-                upper_hz = job->best_upper_hz;
-                snr_cdbfs = job->best_snr_cdbfs == INT16_MIN ? 0 : job->best_snr_cdbfs;
-                iq_recorded = job->iq_recorded;
+                antenna_id = job->antenna_id;
+                algorithm_id = job->algorithm_id;
+                total_candidates = job->candidate_count;
+                if (detect_request.candidate_offset > job->candidate_count)
+                {
+                    status = SCANNER_RADIO_STATUS_INVALID;
+                    candidate_offset = 0;
+                }
+                else
+                {
+                    remaining = job->candidate_count - detect_request.candidate_offset;
+                    candidate_count = remaining > SCANNER_DETECT_RESULT_PAGE_SIZE ? SCANNER_DETECT_RESULT_PAGE_SIZE
+                                                                                  : (uint16_t)remaining;
+                    for (page_index = 0; page_index < candidate_count; ++page_index)
+                        page[page_index] = job->candidates[detect_request.candidate_offset + page_index].wire;
+                }
                 if (state == SCANNER_DETECT_STATE_FAILED)
-                    status = SCANNER_RADIO_STATUS_CAPTURE_ERROR;
+                    status = job->failure_status != 0 ? job->failure_status : SCANNER_RADIO_STATUS_CAPTURE_ERROR;
             }
-            response_size = scanner_encode_detect_result_response(
-                response, detect_request.request_id, status, detect_request.job_id, state, progress, current_khz,
-                detections, center_hz, lower_hz, upper_hz, snr_cdbfs, iq_recorded);
+            response_size = scanner_encode_detect_result_response(response, sizeof(response), detect_request.request_id,
+                                                                  status, detect_request.job_id, state, progress,
+                                                                  antenna_id, algorithm_id, total_candidates,
+                                                                  candidate_offset, candidates, candidate_count);
             if (!store_worker_response(worker_result, response, response_size))
                 return 0;
             return 1;

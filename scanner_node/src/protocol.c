@@ -573,28 +573,32 @@ int scanner_decode_save_iq_request(const uint8_t *bytes, size_t size, ScannerRaw
 
 int scanner_decode_detect_start_request(const uint8_t *bytes, size_t size, ScannerDetectStartRequest *request)
 {
-    uint64_t frequency_count;
     uint16_t fft_size;
     if (bytes == NULL || request == NULL || size != SCANNER_DETECT_START_REQUEST_SIZE
         || bytes[4] != SCANNER_DETECT_START_COMMAND)
         return 0;
     request->request_id = read_u32_le(bytes);
     request->channel = bytes[5];
-    request->start_khz = read_u32_le(bytes + 6);
-    request->stop_khz = read_u32_le(bytes + 10);
-    request->step_khz = read_u32_le(bytes + 14);
-    request->fft_size = read_u16_le(bytes + 18);
-    request->averages = read_u16_le(bytes + 20);
+    request->antenna_id = bytes[6];
+    request->algorithm_id = bytes[7];
+    request->start_khz = read_u32_le(bytes + 8);
+    request->stop_khz = read_u32_le(bytes + 12);
+    request->dwell_ms = read_u32_le(bytes + 16);
+    request->fft_size = read_u16_le(bytes + 20);
+    request->sensitivity_cdb = (int16_t)read_u16_le(bytes + 22);
+    request->pfa_ppm = read_u32_le(bytes + 24);
+    request->training_bins_per_side = bytes[28];
+    request->guard_bins_per_side = bytes[29];
     fft_size = request->fft_size;
     if (request->channel > 1 || request->start_khz < 1000u || request->stop_khz > 7000000u
-        || request->start_khz > request->stop_khz || request->step_khz == 0
-        || fft_size < 64u || fft_size > 4096u
-        || (fft_size & (fft_size - 1u)) != 0 || request->averages == 0
-        || request->averages > SCANNER_DETECT_MAX_AVERAGES)
+        || request->start_khz > request->stop_khz || request->dwell_ms == 0 || request->dwell_ms > 60000u
+        || fft_size < 64u || fft_size > 4096u || (fft_size & (fft_size - 1u)) != 0 || request->sensitivity_cdb < 0
+        || request->sensitivity_cdb > 6000 || request->pfa_ppm == 0 || request->pfa_ppm > 100000u
+        || request->training_bins_per_side == 0 || request->training_bins_per_side > 64u
+        || request->guard_bins_per_side > 32u
+        || 2u * ((uint32_t)request->training_bins_per_side + request->guard_bins_per_side) + 1u > fft_size)
         return 0;
-    frequency_count = ((uint64_t)request->stop_khz - request->start_khz + request->step_khz - 1u)
-                      / request->step_khz + 1u;
-    return frequency_count <= SCANNER_DETECT_MAX_FREQUENCIES;
+    return 1;
 }
 
 int scanner_decode_detect_result_request(const uint8_t *bytes, size_t size, ScannerDetectResultRequest *request)
@@ -604,11 +608,12 @@ int scanner_decode_detect_result_request(const uint8_t *bytes, size_t size, Scan
         return 0;
     request->request_id = read_u32_le(bytes);
     request->job_id = read_u32_le(bytes + 5);
+    request->candidate_offset = read_u32_le(bytes + 9);
     return request->job_id != 0;
 }
 
 size_t scanner_encode_detect_start_response(uint8_t output[SCANNER_DETECT_START_RESPONSE_SIZE], uint32_t request_id,
-                                            uint8_t status, uint32_t job_id)
+                                            uint8_t status, uint32_t job_id, uint8_t antenna_id)
 {
     if (output == NULL)
         return 0;
@@ -616,16 +621,23 @@ size_t scanner_encode_detect_start_response(uint8_t output[SCANNER_DETECT_START_
     output[4] = SCANNER_DETECT_START_COMMAND;
     output[5] = status;
     write_le(output + 6, job_id, 4);
+    output[10] = antenna_id;
     return SCANNER_DETECT_START_RESPONSE_SIZE;
 }
 
-size_t scanner_encode_detect_result_response(uint8_t output[SCANNER_DETECT_RESULT_RESPONSE_SIZE],
-                                             uint32_t request_id, uint8_t status, uint32_t job_id,
-                                             uint8_t state, uint16_t progress, uint32_t current_frequency_khz,
-                                             uint16_t detection_count, uint64_t center_hz, uint64_t lower_hz,
-                                             uint64_t upper_hz, int16_t snr_cdbfs, uint8_t iq_recorded)
+size_t scanner_encode_detect_result_response(uint8_t *output, size_t output_capacity, uint32_t request_id,
+                                             uint8_t status, uint32_t job_id, uint8_t state, uint16_t progress,
+                                             uint8_t antenna_id, uint8_t algorithm_id, uint32_t total_candidates,
+                                             uint32_t candidate_offset, const ScannerDetectCandidate *candidates,
+                                             uint16_t candidate_count)
 {
-    if (output == NULL || state > SCANNER_DETECT_STATE_FAILED || progress > 1000u)
+    size_t index;
+    size_t response_size = SCANNER_DETECT_RESULT_HEADER_SIZE
+                           + (size_t)candidate_count * SCANNER_DETECT_CANDIDATE_WIRE_SIZE;
+    if (output == NULL || state > SCANNER_DETECT_STATE_FAILED || progress > 1000u
+        || candidate_count > SCANNER_DETECT_RESULT_PAGE_SIZE || output_capacity < response_size
+        || (candidate_count > 0 && candidates == NULL) || candidate_offset > total_candidates
+        || candidate_count > total_candidates - candidate_offset)
         return 0;
     write_le(output, request_id, 4);
     output[4] = SCANNER_DETECT_GET_RESULT_COMMAND;
@@ -633,12 +645,18 @@ size_t scanner_encode_detect_result_response(uint8_t output[SCANNER_DETECT_RESUL
     write_le(output + 6, job_id, 4);
     output[10] = state;
     write_le(output + 11, progress, 2);
-    write_le(output + 13, current_frequency_khz, 4);
-    write_le(output + 17, detection_count, 2);
-    write_le(output + 19, center_hz, 8);
-    write_le(output + 27, lower_hz, 8);
-    write_le(output + 35, upper_hz, 8);
-    write_le(output + 43, (uint16_t)snr_cdbfs, 2);
-    output[45] = iq_recorded ? 1u : 0u;
-    return SCANNER_DETECT_RESULT_RESPONSE_SIZE;
+    output[13] = antenna_id;
+    output[14] = algorithm_id;
+    write_le(output + 15, total_candidates, 4);
+    write_le(output + 19, candidate_offset, 4);
+    write_le(output + 23, candidate_count, 2);
+    for (index = 0; index < candidate_count; ++index)
+    {
+        uint8_t *entry = output + SCANNER_DETECT_RESULT_HEADER_SIZE + index * SCANNER_DETECT_CANDIDATE_WIRE_SIZE;
+        write_le(entry, candidates[index].center_hz, 8);
+        write_le(entry + 8, candidates[index].bandwidth_hz, 4);
+        write_le(entry + 12, (uint16_t)candidates[index].power_cdbfs, 2);
+        write_le(entry + 14, (uint16_t)candidates[index].snr_cdb, 2);
+    }
+    return response_size;
 }

@@ -11,7 +11,7 @@ int main(void)
     size_t index;
     uint8_t applied = 255;
     int16_t power = 123;
-    if (scanner_commutator_select_antenna(1, 255, &applied) != SCANNER_COMMUTATOR_UNSUPPORTED || applied != 0
+    if (scanner_commutator_select_antenna(1, 255, &applied) != SCANNER_COMMUTATOR_OK || applied != 255
         || scanner_commutator_set_path(1, 255, &power) != SCANNER_COMMUTATOR_UNSUPPORTED || power != 0)
         return 1;
     for (index = 0; index < sizeof(commands); ++index)

@@ -31,6 +31,7 @@ struct ScannerRadioWorker
     size_t request_count;
     size_t response_head;
     size_t response_count;
+    unsigned int idle_interval_ms;
     int stopping;
     int current_active;
     int cancel_current;
@@ -77,12 +78,14 @@ static void worker_run(ScannerRadioWorker *worker)
         scanner_mutex_lock(&worker->mutex);
         while (worker->request_count == 0 && !worker->stopping)
         {
-            if (scanner_condition_wait_timeout(&worker->request_ready, &worker->mutex, 50u)
+            if (scanner_condition_wait_timeout(&worker->request_ready, &worker->mutex, worker->idle_interval_ms)
                 && worker->idle_handler != NULL)
             {
+                unsigned int next_interval_ms;
                 scanner_mutex_unlock(&worker->mutex);
-                worker->idle_handler(worker, worker->inventory, worker->context);
+                next_interval_ms = worker->idle_handler(worker, worker->inventory, worker->context);
                 scanner_mutex_lock(&worker->mutex);
+                worker->idle_interval_ms = next_interval_ms > 0 ? next_interval_ms : 1u;
             }
         }
         if (worker->stopping)
@@ -118,7 +121,10 @@ static void worker_run(ScannerRadioWorker *worker)
             action = 0;
 
         if (worker->idle_handler != NULL && action == 1 && !result.fatal && !result.close_after_send)
-            worker->idle_handler(worker, worker->inventory, worker->context);
+        {
+            unsigned int next_interval_ms = worker->idle_handler(worker, worker->inventory, worker->context);
+            worker->idle_interval_ms = next_interval_ms > 0 ? next_interval_ms : 1u;
+        }
 
         scanner_mutex_lock(&worker->mutex);
         worker->current_active = 0;
@@ -165,6 +171,7 @@ int scanner_radio_worker_start_with_idle(ScannerRadioWorker **worker_out, Scanne
     worker->inventory = inventory;
     worker->handler = handler;
     worker->idle_handler = idle_handler;
+    worker->idle_interval_ms = 50u;
     worker->context = context;
 #ifdef _WIN32
     InitializeCriticalSection(&worker->mutex);

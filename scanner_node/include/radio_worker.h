@@ -24,8 +24,8 @@ typedef struct
 typedef int (*ScannerRadioWorkerHandler)(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
                                          const ScannerDatagram *request, ScannerRadioWorkerResult *result,
                                          void *context);
-typedef void (*ScannerRadioWorkerIdleHandler)(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
-                                              void *context);
+typedef unsigned int (*ScannerRadioWorkerIdleHandler)(ScannerRadioWorker *worker, ScannerRadioInventory *inventory,
+                                                      void *context);
 
 int scanner_radio_worker_start(ScannerRadioWorker **worker, ScannerRadioInventory *inventory,
                                ScannerRadioWorkerHandler handler, void *context, char *error, size_t error_size);

@@ -150,8 +150,7 @@ int scanner_dsp_cfar_detect(const double *psd_dbfs_per_hz, size_t bin_count, siz
 
     if (psd_dbfs_per_hz == NULL || active_bins == NULL || bin_count == 0 || active_capacity < bin_count
         || training_bins_per_side == 0 || false_alarm_probability <= 0.0 || false_alarm_probability >= 1.0
-        || !isfinite(false_alarm_probability)
-        || guard_bins_per_side > (SIZE_MAX - training_bins_per_side - 1u) / 2u)
+        || !isfinite(false_alarm_probability) || guard_bins_per_side > (SIZE_MAX - training_bins_per_side - 1u) / 2u)
         return 0;
     if (training_bins_per_side > SIZE_MAX / 2u)
         return 0;

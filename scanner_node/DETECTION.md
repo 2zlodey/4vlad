@@ -8,24 +8,50 @@
 | --- | --- |
 | IQ | S8 и S16 Q11; поддерживаются Stub, HackRF и BladeRF при включённых backend SDK |
 | PSD | Welch, Hann, 50% overlap, удаление комплексного DC в каждом сегменте |
-| FFT | 64–4096 точек; измерение: 512, sweep: 1024 |
+| FFT | 64–4096 точек; размер задаёт сервер в параметрах алгоритма |
 | FFT backend | FFTW3; forward plan повторно используется для сегментов одного PSD |
 | Feature threshold | 8 dB над медианным PSD floor |
-| Signal band | Непрерывная область минимум 2 бина; максимум результата — 16 полос |
+| Legacy feature bands | Для одного окна: непрерывная область минимум 2 бина; максимум `ScannerAnalysisResult` — 16 полос |
 | Числовой floor | -180 dBFS/Hz; если медиана попала в него, применяется ограниченная оценка `peak - 60 dB` |
 
 ## Асинхронный CFAR scan
 
-Команды `0x72`/`0x73` выполняют ограниченный scan через единственный radio worker. `START` подтверждается сразу, а worker делает по одному capture/FFT шагу между UDP-запросами; `GET_RESULT` возвращает прогресс и лучший кандидат, не удерживая запрос до конца полного диапазона.
+Команды `0x72`/`0x73` выполняют scan через единственный radio worker. Сервер задаёт полосу, канал, антенну, алгоритм, параметры и общий dwell; частотного шага в запросе нет. Узел выбирает поддерживаемые sample rate/BW, вычисляет число перекрывающихся окон и перестраивает SDR внутри диапазона. Для BladeRF выбранный RX-канал захватывается как `BLADERF_RX_X1`; второй RX не включается, поэтому channel 0 или 1 может использовать собственный максимум sample rate (для данного устройства 61.44 Msps) и BW (56 MHz). Перекрытие окон 20%; после 64 кандидатов на страницу результат опрашивается следующим offset.
 
 | Команда | Запрос после общего заголовка | Результат |
 | --- | --- | --- |
-| `0x72 DETECT_START` | channel, start/stop/step kHz, FFT size, averages per frequency | status и `job_id`; допустимо до 128 частот, FFT 64–4096, 1–32 averages |
-| `0x73 DETECT_GET_RESULT` | `job_id` | state, progress 0–1000, текущая частота, число CFAR-полос, границы и центр лучшей полосы в Hz, SNR в centi-dB, флаг записи IQ |
+| `0x72 DETECT_START` | channel, antenna ID, algorithm ID, start/stop kHz, dwell ms, FFT, sensitivity, Pfa, training/guard bins | status, `job_id`, эффективный antenna ID |
+| `0x73 DETECT_GET_RESULT` | `job_id`, candidate offset | state, progress 0–1000, antenna/algorithm IDs, total, offset, page count, затем элементы `{center_hz:u64, bandwidth_hz:u32, power_cdbfs:i16, snr_cdb:i16}` |
 
-Одновременно разрешён один job. CFAR использует CA-CFAR: 12 training bins с каждой стороны, 2 guard bins и номинальную настройку `Pfa=0.001` для независимых экспоненциальных power bins. Welch overlap и усреднение меняют фактическую статистику, поэтому это не обещание калиброванной вероятности ложной тревоги. PSD усредняется по кадрам в линейной мощности до CFAR; соседние активные bins образуют кандидата. Сканирование заканчивается состоянием `complete`; ошибка capture/tune или изменение frontend/sample rate/bandwidth даёт `failed`. IQ каждого шага добавляется в SCIQREC1 при заданном `--iq-file`; записи содержат частоту и timestamp, а флаг результата означает, что найденный кандидат имеет запись в этом файле. Это не распознавание модуляции или протокола.
+Одновременно разрешён один job. Algorithm ID `1` — Welch PSD + CA-CFAR. Его параметры: FFT size (64–4096, степень двойки), минимальный SNR (centi-dB), Pfa (ppm), training bins/side (1–64), guard bins/side (0–32). CA-CFAR использует заданные training/guard bins; стандартное значение Pfa `1000 ppm` (`0.001`). Welch overlap и усреднение меняют фактическую статистику, поэтому Pfa не является обещанием калиброванной вероятности ложной тревоги. PSD усредняется в линейной мощности; соседние активные bins образуют кандидата. Candidate power — интеграл PSD по полосе в dBFS, не dBm; SNR — отношение интегральной мощности кандидата к локально оценённому шуму.
 
-Запрос `DETECT_START` имеет фиксированный размер 22 байта: `request_id:u32, opcode:u8, channel:u8, start_khz:u32, stop_khz:u32, step_khz:u32, fft_size:u16, averages:u16`. Ответ `DETECT_START` — 10 байт с `job_id:u32`. `DETECT_GET_RESULT` — 9-байтовый запрос (`request_id:u32, opcode:u8, job_id:u32`) и 46-байтовый ответ. Многобайтовые поля little-endian; статусы используют общую таблицу radio status.
+`dwell_ms` — общий бюджет времени интеграции I/Q по окнам диапазона. Кадры распределяются по окнам пропорционально, минимум один capture-блок на окно. Блок содержит до 16384 complex I/Q pairs; Welch усредняет его внутренние FFT-сегменты. Число блоков округляется вверх, поэтому интеграция квантована блоками и может превышать `dwell_ms`. Текущий backend запускает/останавливает sync RX для каждого блока; длинный dwell может завершиться USB/NIOS timeout, поэтому для него нужен непрерывный RX stream. Все кандидаты хранятся до лимита 16384; при превышении job завершается с `RESULT_LIMIT`, чтобы не выдавать частичный результат как полный.
+
+Пример для scan 1.5–2.5 GHz на BladeRF RX_X1: usable width 50.4 MHz, hop 40.32 MHz, 25 окон, 61.44 Msps, 16384 complex pairs/capture.
+
+Число блоков на окно вычисляется как `max(1, ceil(ceil(dwell_ms * sample_rate_hz / 1000 / window_count) / 16384))`. Поэтому короткие dwell округляются вверх до полного блока в каждом окне:
+
+| Запрошенный dwell | Блоков на окно | Всего блоков | Сэмпловая интеграция |
+| ---: | ---: | ---: | ---: |
+| 1 ms | 1 | 25 | 6.67 ms |
+| 10 ms | 2 | 50 | 13.33 ms |
+| 100 ms | 15 | 375 | 100 ms |
+| 1000 ms | 150 | 3750 | target 1000 ms; ранее scan завершился USB/NIOS timeout до конца |
+
+На практике `dwell_ms=1` и `10` в этом примере дают соответственно около 6.67 и 13.33 ms сэмпловой интеграции; измеренное wall-clock время больше из-за аппаратной настройки окон.
+
+Для выбранной антенны ищется запись `rfin[].in` с совпадающим antenna ID; её `type`, `dBi`, `from/to`, `polar` и `direction` доступны в журнале, а effective input возвращается серверу. Единицы `from/to` исходный протокол не определяет, поэтому они пока не используются как RF-фильтр. На каждом RX-канале по умолчанию задан маршрут `switched`; физическое переключение пока не выполняется, но ID проверяется и подтверждается без ошибки. Опциональный `antennaRouting` в device JSON позволяет задать два маршрута, по одному на RX channel:
+
+```json
+"antennaRouting": [
+	{ "mode": "switched" },
+	{ "mode": "fixed", "antennaInput": 7 }
+]
+```
+
+Для `fixed` запрос принимается, но эффективным становится указанный fixed antenna ID; ответ `START` и страницы результата возвращают именно его. Это покрывает два коммутатора, один общий фиксированный вход или смешанную конфигурацию. Реальная аппаратная коммутация остаётся отложенной.
+
+Запрос `DETECT_START` — 30 байт: `[request_id:u32, opcode:u8, channel:u8, antenna_id:u8, algorithm_id:u8, start_khz:u32, stop_khz:u32, dwell_ms:u32, fft_size:u16, sensitivity_cdb:i16, pfa_ppm:u32, training_bins:u8, guard_bins:u8]`. Ответ — 11 байт, включая `job_id:u32` и эффективный antenna ID. Запрос `DETECT_GET_RESULT` — 13 байт: общий заголовок, `job_id:u32`, `candidate_offset:u32`. Ответный заголовок — 25 байт, за ним 0–64 элемента по 16 байт. Элемент: `center_hz:u64`, `bandwidth_hz:u32`, `power_cdbfs:i16`, `snr_cdb:i16`. Все multi-byte поля little-endian.
 
 ## Классификация
 
@@ -68,7 +94,7 @@
 
 ## Получение результата
 
-При `--debug 1` строка detector выводится в консоль. При `--debug 2` ищите её в созданном TXT-файле:
+При `--debug 1` строка legacy window classifier выводится в консоль. При `--debug 2` ищите её в созданном TXT-файле:
 
 ```text
 DSP class=narrowband-tone confidence=0.95 peak-offset=+500000 Hz occupied-BW=... Hz PSD-floor=... dBFS/Hz
@@ -86,4 +112,4 @@ Linux:
 grep 'DSP class=' scanner_*.txt
 ```
 
-Полный результат доступен внутри C через `scanner_analysis_worker_analyze(...)` и `ScannerAnalysisResult`; описание типов — в `include/dsp.h` и `include/analysis_worker.h`. Порог 8 dB и minimum band width 2 bins задаются при вызове в `src/radio_commands.c`.
+Результат диапазонного detector scan запрашивается через `0x72/0x73`; каждый candidate содержит центр, ширину, интегральную мощность dBFS и SNR. Legacy one-window feature result доступен внутри C через `scanner_analysis_worker_analyze(...)` и `ScannerAnalysisResult`; его порог 8 dB и minimum band width 2 bins не являются параметрами CA-CFAR scan.
