@@ -73,7 +73,7 @@ VER echoes RequestId and has no opcode or status in its response. Standard measu
 | Antenna/gain path (`0xC8/0xC9`) | `0xC8` validates the logical antenna ID and acknowledges it; physical switching is deferred. `0xC9` remains a placeholder returning `8`. |
 | Gain | Total gain is signed centi-dB. Gain-stage values are signed dB; BladeRF reports total RX gain in LNA and `0` in VGA. |
 | DSP | Welch PSD, Hann window, 50% overlap; FFT sizes 64-4096. Measurement uses 1024 samples; sweep uses 4096. |
-| Detector | `0x72/0x73`, internal overlapped RF windows, algorithm 1 CA-CFAR, all candidates retrieved using offsets. See `DETECTION.md` for wire layouts and parameters. |
+| Detector | `0x72/0x73`, internal overlapped RF windows, algorithm 1 CA-CFAR, all candidates retrieved using offsets. See `DETECTION.md` for the step-by-step server procedure, wire layouts and parameters. |
 | BladeRF detector capture | Uses `BLADERF_RX_X1` for the selected channel only. Either RX channel can use its advertised 61.44 Msps maximum independently; analog BW max is 56 MHz. |
 | Antenna routing | `rfin[].in` is the antenna ID. Optional `antennaRouting` configures each of two RX channels as `switched` or `fixed`. Physical switch control is deferred; logical selection is acknowledged. Units for `rfin[].from/to` remain unspecified and are not used to reject RF ranges. |
 | IQ | Maximum 4096 complex pairs. Format `1`: signed 8-bit I/Q. Format `2`: signed 16-bit little-endian I/Q. |

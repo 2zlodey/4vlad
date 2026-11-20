@@ -306,8 +306,7 @@ static int configure_detector_capture(ScannerRadioInventory *inventory, uint8_t 
     rate_target_hz = desired_width > rate_limit_hz ? rate_limit_hz : desired_width;
     if (desired_width > frontend->bandwidth_max_hz)
         desired_width = frontend->bandwidth_max_hz;
-    if (!choose_detector_bandwidth(frontend, (uint32_t)desired_width, rate_limit_hz,
-                                   &selected_bandwidth))
+    if (!choose_detector_bandwidth(frontend, (uint32_t)desired_width, rate_limit_hz, &selected_bandwidth))
         return 0;
     selected_rate = quantize_rate_up(frontend, rate_target_hz);
     if (!scanner_radio_set_sample_rate(inventory, channel, selected_rate, &actual_rate)
@@ -317,9 +316,9 @@ static int configure_detector_capture(ScannerRadioInventory *inventory, uint8_t 
     *sample_rate_hz = actual_rate;
     *bandwidth_hz = actual_bandwidth;
     *usable_width_hz = (actual_rate < actual_bandwidth ? actual_rate : actual_bandwidth) * 9u / 10u;
-     LG('*', "Detector capture plan channel=%u mode=single-RX sample-rate=%u Hz BW=%u Hz usable=%llu Hz max-rate=%u Hz",
+    LG('*', "Detector capture plan channel=%u mode=single-RX sample-rate=%u Hz BW=%u Hz usable=%llu Hz max-rate=%u Hz",
        (unsigned int)channel, (unsigned int)actual_rate, (unsigned int)actual_bandwidth,
-         (unsigned long long)*usable_width_hz, (unsigned int)frontend->sample_rate_max_hz);
+       (unsigned long long)*usable_width_hz, (unsigned int)frontend->sample_rate_max_hz);
     return *usable_width_hz > 0;
 }
 
@@ -384,8 +383,9 @@ static void detector_add_candidate(ScannerDetectorJob *job, uint64_t lower_hz, u
         return;
     }
     job->candidates[job->candidate_count].wire.center_hz = center_hz;
-    job->candidates[job->candidate_count].wire.bandwidth_hz =
-        upper_hz - lower_hz > UINT32_MAX ? UINT32_MAX : (uint32_t)(upper_hz - lower_hz);
+    job->candidates[job->candidate_count].wire.bandwidth_hz = upper_hz - lower_hz > UINT32_MAX
+                                                                  ? UINT32_MAX
+                                                                  : (uint32_t)(upper_hz - lower_hz);
     job->candidates[job->candidate_count].wire.power_cdbfs = detector_db_to_cdb(power_dbfs);
     job->candidates[job->candidate_count].wire.snr_cdb = detector_db_to_cdb(snr_db);
     job->candidates[job->candidate_count].lower_hz = lower_hz;
@@ -543,12 +543,9 @@ unsigned int scanner_radio_detector_idle(ScannerRadioWorker *worker, ScannerRadi
             absolute_center_hz = (double)center_hz + center_offset;
             if (absolute_upper_hz <= (double)job->start_hz || absolute_lower_hz >= (double)job->stop_hz)
                 continue;
-            lower_hz = (uint64_t)fmin((double)job->stop_hz,
-                                      fmax((double)job->start_hz, absolute_lower_hz));
-            upper_hz = (uint64_t)fmin((double)job->stop_hz,
-                                      fmax((double)job->start_hz, absolute_upper_hz));
-            candidate_center_hz = (uint64_t)fmin((double)job->stop_hz,
-                                                  fmax((double)job->start_hz, absolute_center_hz));
+            lower_hz = (uint64_t)fmin((double)job->stop_hz, fmax((double)job->start_hz, absolute_lower_hz));
+            upper_hz = (uint64_t)fmin((double)job->stop_hz, fmax((double)job->start_hz, absolute_upper_hz));
+            candidate_center_hz = (uint64_t)fmin((double)job->stop_hz, fmax((double)job->start_hz, absolute_center_hz));
             if (upper_hz > lower_hz)
                 detector_add_candidate(job, lower_hz, upper_hz, candidate_center_hz, power_dbfs, snr_db,
                                        sample_rate_hz / bin_count);
@@ -1040,8 +1037,8 @@ int scanner_radio_command_handle(ScannerRadioWorker *worker, ScannerRadioInvento
                status == SCANNER_RADIO_STATUS_OK ? job->window_count : 0u, (unsigned int)status);
             if (status == SCANNER_RADIO_STATUS_OK && antenna != NULL)
                 LG('*', "Antenna table input=%d type=%d gain=%d dBi from=%d to=%d polar=%.1f direction=%.1f",
-                   (int)antenna->input, (int)antenna->type, (int)antenna->dbi, (int)antenna->from,
-                   (int)antenna->to, antenna->polar, antenna->direction);
+                   (int)antenna->input, (int)antenna->type, (int)antenna->dbi, (int)antenna->from, (int)antenna->to,
+                   antenna->polar, antenna->direction);
             return 1;
         }
     }

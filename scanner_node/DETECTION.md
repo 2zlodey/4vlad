@@ -53,6 +53,33 @@
 
 Запрос `DETECT_START` — 30 байт: `[request_id:u32, opcode:u8, channel:u8, antenna_id:u8, algorithm_id:u8, start_khz:u32, stop_khz:u32, dwell_ms:u32, fft_size:u16, sensitivity_cdb:i16, pfa_ppm:u32, training_bins:u8, guard_bins:u8]`. Ответ — 11 байт, включая `job_id:u32` и эффективный antenna ID. Запрос `DETECT_GET_RESULT` — 13 байт: общий заголовок, `job_id:u32`, `candidate_offset:u32`. Ответный заголовок — 25 байт, за ним 0–64 элемента по 16 байт. Элемент: `center_hz:u64`, `bandwidth_hz:u32`, `power_cdbfs:i16`, `snr_cdb:i16`. Все multi-byte поля little-endian.
 
+## Процедура сервера
+
+1. Отправить `GET_RADIO_FRONTENDS (0x04)` и выбрать descriptor с RX capability; его `rx_channels` задаёт допустимые номера канала. Затем выбрать frontend через `SET_ACTIVE_RADIO (0x05)`. Для BladeRF номера RX-каналов нулевые: `0` или `1`.
+2. При необходимости заранее настроить gain/прочие RF-параметры. Для detector-команды отдельные `SET_FREQUENCY`, `SET_SAMPLE_RATE` и `SET_BANDWIDTH` не нужны: `DETECT_START` задаёт диапазон, а узел сам выбирает sample rate/BW и внутренние окна. Явно заданные маршрут антенн берётся из `antennaRouting`; без него оба канала считаются `switched`.
+3. Отправить `DETECT_START (0x72)` с `channel`, `antenna_id`, `algorithm_id=1`, `start_khz`, `stop_khz`, `dwell_ms`, `fft_size`, `sensitivity_cdb`, `pfa_ppm`, `training_bins_per_side`, `guard_bins_per_side`. Единицы частот запроса — kHz; dwell — ms; чувствительность/Pfa — centi-dB/ppm. Сохранить возвращённые `job_id` и effective antenna ID.
+4. Периодически отправлять `DETECT_GET_RESULT (0x73)` для этого `job_id`, задавая `candidate_offset=0`. Разбирать state и progress. Пока state `RUNNING`, продолжать polling с разумной паузой; не запускать второй job, пока первый не завершился.
+5. Когда state `COMPLETE`, поле `total_candidates` задаёт размер полного массива. Ответ содержит не более 64 элементов. Для следующей страницы увеличивать offset на полученное `candidate_count`: `0, 64, 128, ...`, пока offset не достигнет total. Если кандидатов ноль, массив пуст. Каждый элемент сообщает центр в Hz, ширину в Hz, интегральную мощность dBFS и SNR dB.
+6. Если status ненулевой или state `FAILED`, считать результат ошибочным/неполным; в частности `RESULT_LIMIT` означает превышение внутренней ёмкости кандидатов. После успешного получения всех страниц можно отправить `EXIT (0xDE)` либо оставить сессию открытой для других команд.
+
+Упрощённая логика клиента:
+
+```text
+frontend = GET_RADIO_FRONTENDS(); select_rx_frontend(frontend)
+job_id, antenna = DETECT_START(channel, antenna_id, 1, start_khz, stop_khz,
+							   dwell_ms, fft_size, sensitivity, pfa, training, guard)
+do:
+	result = DETECT_GET_RESULT(job_id, candidate_offset=0)
+while result.state == RUNNING
+require result.state == COMPLETE
+candidates = []
+offset = 0
+while offset < result.total_candidates:
+	page = DETECT_GET_RESULT(job_id, candidate_offset=offset)
+	candidates.extend(page.candidates)
+	offset += page.candidate_count
+```
+
 ## Классификация
 
 Правила выполняются по порядку; срабатывает первое подходящее. Иначе результат `unknown`.
